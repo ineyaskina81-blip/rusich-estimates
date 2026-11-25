@@ -34,6 +34,24 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
     <main id="main"></main>
   </div>
 </div>
+<dialog id="new-estimate" aria-labelledby="new-estimate-title">
+  <div class="drawer">
+    <header class="drawer-head">
+      <h2 id="new-estimate-title">Новая смета</h2>
+      <button class="btn drawer-close" id="cancel-estimate" type="button" aria-label="Закрыть форму">×</button>
+    </header>
+    <div class="drawer-body">
+      <form class="action" id="estimate-form">
+        <div class="fields">
+          <label>Объект<input name="name" required maxlength="160" autofocus></label>
+          <label>Заказчик (необязательно)<input name="client" maxlength="160"></label>
+          <label>Виды работ (необязательно)<input name="scope" maxlength="160"></label>
+        </div>
+        <button class="btn primary" type="submit">Создать смету</button>
+      </form>
+    </div>
+  </div>
+</dialog>
 <dialog id="position" aria-labelledby="drawer-title"></dialog>
 <p id="toast" class="toast" role="status"></p>
 <script>
@@ -83,6 +101,8 @@ const main = document.querySelector('#main');
 const crumb = document.querySelector('#crumb');
 const dialog = document.querySelector('#position');
 const toast = document.querySelector('#toast');
+const newEstimateDialog = document.querySelector('#new-estimate');
+const estimateForm = document.querySelector('#estimate-form');
 const listFilters = { query: '', status: 'all' };
 let cardFilters = { query: '', category: 'all', role: 'all' };
 let activeEstimate;
@@ -93,8 +113,18 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const quantity = value => value == null ? '—' : numbers.format(value);
 const money = value => value == null ? '—' : numbers.format(value) + ' ₽';
-const estimateStatus = estimate => estimate.rows.every(row => nextStep(row) === 4) ? 'Готова' : 'В работе';
+const estimateStatus = estimate =>
+  estimate.rows.length > 0 && estimate.rows.every(row => nextStep(row) === 4) ? 'Готова' : 'В работе';
 const rowMatches = (row, query) => row.name.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru'));
+
+function nextEstimateNumber(date) {
+  const prefix = String(date.getFullYear()).slice(-2) + '-';
+  const lastNumber = estimates.reduce((highest, estimate) => {
+    if (!estimate.id.startsWith(prefix)) return highest;
+    return Math.max(highest, Number(estimate.id.slice(prefix.length)) || 0);
+  }, 0);
+  return prefix + String(lastNumber + 1).padStart(3, '0');
+}
 
 function nextStep(row) {
   if (!row.name || row.volume == null) return 0;
@@ -134,10 +164,10 @@ function filterSelect(id, label, first, values, selected) {
     values.map(value => '<option' + (selected === value ? ' selected' : '') + '>' + esc(value) + '</option>').join('') + '</select>';
 }
 
-function table(headers, rows) {
+function table(headers, rows, emptyMessage = 'По этим фильтрам ничего не найдено.') {
   return '<div class="table-wrap"><table><thead><tr>' +
     headers.map(header => '<th scope="col">' + header + '</th>').join('') +
-    '</tr></thead><tbody>' + (rows.join('') || '<tr><td class="empty" colspan="' + headers.length + '">По этим фильтрам ничего не найдено.</td></tr>') +
+    '</tr></thead><tbody>' + (rows.join('') || '<tr><td class="empty" colspan="' + headers.length + '">' + esc(emptyMessage) + '</td></tr>') +
     '</tbody></table></div>';
 }
 
@@ -145,7 +175,8 @@ function renderList() {
   const completed = estimates.filter(estimate => estimateStatus(estimate) === 'Готова').length;
   crumb.innerHTML = '<span aria-current="page">Сметы</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Сметный отдел</p><h1>Сметы</h1>' +
-    '<p class="subtitle">Откройте смету, чтобы увидеть позиции и передать их дальше.</p></div></div>' +
+    '<p class="subtitle">Создайте смету или откройте её из реестра.</p></div>' +
+    '<button class="btn primary compact" id="create-estimate" type="button" aria-haspopup="dialog">+ Новая смета</button></div>' +
     '<section class="stats" aria-label="Состояние смет">' + stat('Всего смет', estimates.length) +
     stat('В работе', estimates.length - completed) + stat('Готовы', completed) + '</section>' +
     '<section class="panel" aria-labelledby="list-title"><div class="panel-head"><h2 id="list-title">Реестр смет</h2></div>' +
@@ -161,12 +192,17 @@ function renderList() {
       const ready = estimate.rows.filter(row => nextStep(row) === 4).length;
       const status = estimateStatus(estimate);
       return '<tr><td class="num">№ ' + estimate.id + '</td><td><a class="text-btn" href="#estimate/' + estimate.id + '">' +
-        esc(estimate.name) + '</a><span class="secondary">' + esc(estimate.scope) + '</span></td><td>' + esc(estimate.client) +
+        esc(estimate.name) + '</a><span class="secondary">' + esc(estimate.scope) + '</span></td><td>' + esc(estimate.client || '—') +
         '</td><td><span class="pill ' + (status === 'Готова' ? 'done' : 'work') + '">' + status + '</span></td>' +
         '<td class="num">' + ready + ' из ' + estimate.rows.length + '</td><td class="num">' + estimate.date + '</td></tr>';
     });
     document.querySelector('#results').innerHTML = table(['Номер', 'Объект', 'Заказчик', 'Статус', 'Готовые позиции', 'Дата сметы'], rows) +
       '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimates.length + '</div>';
+  };
+  document.querySelector('#create-estimate').onclick = () => {
+    estimateForm.reset();
+    estimateForm.elements.namedItem('name').setCustomValidity('');
+    newEstimateDialog.showModal();
   };
   document.querySelector('#query').oninput = event => { listFilters.query = event.target.value; draw(); };
   document.querySelector('#status').onchange = event => { listFilters.status = event.target.value; draw(); };
@@ -178,9 +214,10 @@ function renderCard() {
   const estimate = activeEstimate;
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
   const approvedTotal = ready.reduce((total, row) => total + row.volume * row.customerPrice, 0);
+  const subtitle = [estimate.scope, estimate.client].filter(Boolean).join(' · ');
   crumb.innerHTML = '<a href="#estimates">Сметы</a><span aria-hidden="true">/</span><span aria-current="page">№ ' + estimate.id + '</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
-    '</h1><p class="subtitle">' + esc(estimate.scope) + ' · ' + esc(estimate.client) + '</p></div></div>' +
+    '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div></div>' +
     '<section class="stats" aria-label="Сводка по позициям">' + stat('Подтверждено позиций', ready.length + ' из ' + estimate.rows.length) +
     stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money(approvedTotal), 'По согласованным позициям') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
@@ -210,7 +247,8 @@ function renderCard() {
         money(row.customerPrice) + '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
         '</span></td><td>' + (step ? step.role : '—') + '</td></tr>';
     });
-    document.querySelector('#results').innerHTML = table(['Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Чего не хватает', 'Следующий ответственный'], rows) +
+    const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Нажмите «Добавить позицию».';
+    document.querySelector('#results').innerHTML = table(['Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
       '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimate.rows.length + '</div>';
   };
   document.querySelector('#categories').onclick = event => {
@@ -356,10 +394,41 @@ dialog.addEventListener('close', () => {
   (rowButton || document.querySelector('#add'))?.focus();
 });
 
+document.querySelector('#cancel-estimate').onclick = () => newEstimateDialog.close();
+estimateForm.elements.namedItem('name').oninput = event => event.target.setCustomValidity('');
+estimateForm.onsubmit = event => {
+  event.preventDefault();
+  const fields = new FormData(estimateForm);
+  const name = fields.get('name').trim();
+  if (!name) {
+    const field = estimateForm.elements.namedItem('name');
+    field.setCustomValidity('Укажите название объекта.');
+    field.reportValidity();
+    return;
+  }
+
+  const date = new Date();
+  const estimate = {
+    id: nextEstimateNumber(date),
+    name,
+    client: fields.get('client').trim(),
+    scope: fields.get('scope').trim(),
+    date: date.toLocaleDateString('ru-RU'),
+    rows: []
+  };
+  estimates.unshift(estimate);
+  const saved = save();
+  Object.assign(listFilters, { query: '', status: 'all' });
+  newEstimateDialog.close();
+  location.hash = '#estimate/' + estimate.id;
+  notify(saved ? 'Смета № ' + estimate.id + ' создана.' : 'Локальное хранилище недоступно. Смета доступна до закрытия или обновления страницы.');
+};
+
 function renderScreen(focusHeading = false) {
   const match = location.hash.match(/^#estimate\/(.+)$/);
   const estimate = match ? estimates.find(item => item.id === match[1]) : null;
   if (dialog.open) dialog.close();
+  if (newEstimateDialog.open) newEstimateDialog.close();
   if (estimate !== activeEstimate) cardFilters = { query: '', category: 'all', role: 'all' };
   activeEstimate = estimate;
   if (estimate) renderCard();
