@@ -1043,6 +1043,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     const count = surface.querySelector('#catalog-matches');
     let matches = [];
     let activeIndex = -1;
+    const updateCategoryFields = categorySelect.onchange;
 
     function showSuggestions(open) {
       suggestions.hidden = !open;
@@ -1057,7 +1058,9 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     function drawPositions() {
       const query = positionQuery.value.trim().toLocaleLowerCase('ru');
       const tokens = query.split(/\s+/);
+      const category = categorySelect.value;
       const found = query ? catalog.positions.filter(position => {
+        if (category && position.category !== category) return false;
         const text = (position.name + ' ' + position.code).toLocaleLowerCase('ru').replaceAll('ё', 'е');
         const words = text.match(/[а-я]+/g) ?? [];
         return categories.includes(position.category) && tokens.every(raw => {
@@ -1074,7 +1077,8 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         '<div id="catalog-option-' + i + '" class="catalog-option" role="option" aria-selected="false" data-result="' + i + '">' +
         '<strong>' + esc(positionPriceLabel(position)) + '</strong><span>' +
         esc(position.name + ' · ' + position.code) + '</span></div>').join('');
-      count.textContent = !query ? '' : found.length ? 'Показано ' + matches.length + ' из ' + found.length : 'Подходящих позиций нет.';
+      count.textContent = !query ? '' : (category ? category + ' · ' : '') +
+        (found.length ? 'Показано ' + matches.length + ' из ' + found.length : 'Подходящих позиций нет.');
       showSuggestions(matches.length > 0);
     }
 
@@ -1090,14 +1094,23 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       name.value = position.name;
       name.setCustomValidity('');
       categorySelect.value = position.category;
-      categorySelect.onchange();
+      updateCategoryFields();
       form.elements.namedItem('volume').focus();
     }
 
-    positionQuery.oninput = () => {
+    function clearSelection() {
       if (chosenPosition) form.elements.namedItem('name').value = '';
       chosenPosition = null;
       preview.textContent = '';
+    }
+
+    categorySelect.onchange = () => {
+      if (chosenPosition && categorySelect.value && chosenPosition.category !== categorySelect.value) clearSelection();
+      updateCategoryFields();
+      if (!chosenPosition) drawPositions();
+    };
+    positionQuery.oninput = () => {
+      clearSelection();
       drawPositions();
       renderBaseRate();
     };
