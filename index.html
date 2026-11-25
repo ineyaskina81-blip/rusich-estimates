@@ -33,7 +33,12 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .catalog-fields legend{font-weight:700;margin-bottom:8px}
 .catalog-fields .note{margin:8px 0 0;overflow-wrap:anywhere}
 .catalog-fields select{max-width:100%}
-#catalog-position-price:empty{display:none}
+#catalog-position-price:empty,#catalog-matches:empty{display:none}
+.catalog-suggestions{max-height:250px;overflow:auto;margin:4px 0 0;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.catalog-option{padding:8px 10px;border-radius:5px;cursor:pointer;overflow-wrap:anywhere}
+.catalog-option:hover,.catalog-option[aria-selected=true]{background:var(--soft)}
+.catalog-option strong,.catalog-option span{display:block}
+.catalog-option span{font-size:13px;color:var(--muted)}
 .section-tools{display:flex;flex-wrap:wrap;gap:8px}
 .position-structure{margin:16px 0 0}
 .position-structure .fields{margin-bottom:8px}
@@ -604,8 +609,9 @@ function pricePicker(prices) {
 function positionPicker() {
   if (!catalog) return '<p class="note">Чтобы выбрать позицию из Excel, нажмите «Загрузить справочник» вверху страницы.</p>';
   return '<fieldset class="catalog-fields"><legend>Выбор из справочника</legend><div class="fields">' +
-    '<label>Поиск по названию или коду<input id="catalog-query" type="search"></label>' +
-    '<label>Позиция<select id="catalog-position"></select></label></div>' +
+    '<label>Поиск по названию или коду<input id="catalog-query" type="search" role="combobox" aria-autocomplete="list" ' +
+    'aria-controls="catalog-suggestions" aria-expanded="false" autocomplete="off"></label></div>' +
+    '<div class="catalog-suggestions" id="catalog-suggestions" role="listbox" aria-label="Варианты из справочника" hidden></div>' +
     '<p class="note" id="catalog-position-price" role="status"></p>' +
     '<p class="note" id="catalog-matches" role="status"></p></fieldset>';
 }
@@ -760,14 +766,13 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       dialog.querySelector('#drawer-title').focus();
     };
   }
-  const positionSelect = dialog.querySelector('#catalog-position');
   const positionQuery = dialog.querySelector('#catalog-query');
-  const chosenPosition = () => positionSelect && catalog.positions[positionSelect.value || -1];
+  let chosenPosition = null;
   const baseRate = dialog.querySelector('#base-rate');
   const baseRateError = dialog.querySelector('#base-rate-error');
   let basePrices = [];
   function renderBaseRate() {
-    const position = chosenPosition();
+    const position = chosenPosition;
     baseRateError.textContent = '';
     const needsCatalogPrice = categorySelect.value && categorySelect.value !== 'Механизмы';
     basePrices = needsCatalogPrice && position?.category === categorySelect.value ? pricesForPosition(position, 3) : [];
@@ -785,7 +790,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     const defaultUnits = ['м²', 'м³', 'смена', 'рейс', 'компл.'];
     const setUnit = () => {
       const selection = categories.indexOf(categorySelect.value);
-      const position = chosenPosition();
+      const position = chosenPosition;
       if (selection >= 0) {
         form.elements.namedItem('unit').value = position?.category === categorySelect.value ? position.unit : defaultUnits[selection];
       }
@@ -797,36 +802,92 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     setUnit();
     form.elements.namedItem('name').oninput = event => event.target.setCustomValidity('');
   }
-  if (positionSelect) {
+  if (positionQuery) {
+    const suggestions = dialog.querySelector('#catalog-suggestions');
+    const preview = dialog.querySelector('#catalog-position-price');
+    const count = dialog.querySelector('#catalog-matches');
+    let matches = [];
+    let activeIndex = -1;
+
+    function showSuggestions(open) {
+      suggestions.hidden = !open;
+      positionQuery.setAttribute('aria-expanded', String(open));
+      if (!open) {
+        suggestions.children[activeIndex]?.setAttribute('aria-selected', 'false');
+        activeIndex = -1;
+        positionQuery.removeAttribute('aria-activedescendant');
+      }
+    }
+
     function drawPositions() {
-      const tokens = positionQuery.value.trim().toLocaleLowerCase('ru').split(/\s+/);
-      const matches = catalog.positions.map((position, id) => ({ position, id })).filter(({ position }) => {
+      const query = positionQuery.value.trim().toLocaleLowerCase('ru');
+      const tokens = query.split(/\s+/);
+      const found = query ? catalog.positions.filter(position => {
         const text = (position.name + ' ' + position.code).toLocaleLowerCase('ru');
         return categories.includes(position.category) && tokens.every(token => text.includes(token));
-      });
-      positionSelect.innerHTML = '<option value="">Выберите позицию</option>' +
-        matches.slice(0, 50).map(({ position, id }) => '<option value="' + id + '">' +
-          esc(positionPriceLabel(position) + ' · ' + position.name + ' · ' + position.code) + '</option>').join('');
-      dialog.querySelector('#catalog-position-price').textContent = '';
-      dialog.querySelector('#catalog-matches').textContent = 'Показано ' + Math.min(matches.length, 50) + ' из ' + matches.length;
-      renderBaseRate();
+      }) : [];
+      showSuggestions(false);
+      matches = found.slice(0, 50);
+      suggestions.innerHTML = matches.map((position, i) =>
+        '<div id="catalog-option-' + i + '" class="catalog-option" role="option" aria-selected="false" data-result="' + i + '">' +
+        '<strong>' + esc(positionPriceLabel(position)) + '</strong><span>' +
+        esc(position.name + ' · ' + position.code) + '</span></div>').join('');
+      count.textContent = !query ? '' : found.length ? 'Показано ' + matches.length + ' из ' + found.length : 'Подходящих позиций нет.';
+      showSuggestions(matches.length > 0);
     }
-    positionQuery.oninput = drawPositions;
-    positionSelect.onchange = () => {
-      const position = chosenPosition();
-      dialog.querySelector('#catalog-position-price').textContent = position ? positionPriceLabel(position) : '';
-      if (!position) {
-        renderBaseRate();
-        return;
-      }
+
+    function selectPosition(i) {
+      const position = matches[i];
+      if (!position) return;
+      chosenPosition = position;
+      positionQuery.value = position.name;
+      preview.textContent = positionPriceLabel(position);
+      count.textContent = '';
+      showSuggestions(false);
       const name = form.elements.namedItem('name');
       name.value = position.name;
       name.setCustomValidity('');
       categorySelect.value = position.category;
       categorySelect.onchange();
-      form.elements.namedItem('unit').value = position.unit;
+      form.elements.namedItem('volume').focus();
+    }
+
+    positionQuery.oninput = () => {
+      if (chosenPosition) form.elements.namedItem('name').value = '';
+      chosenPosition = null;
+      preview.textContent = '';
+      drawPositions();
+      renderBaseRate();
     };
-    drawPositions();
+    positionQuery.onfocus = () => { if (!chosenPosition) drawPositions(); };
+    positionQuery.onblur = () => showSuggestions(false);
+    suggestions.onmousedown = event => {
+      if (event.target.closest('[data-result]')) event.preventDefault();
+    };
+    suggestions.onclick = event => {
+      const option = event.target.closest('[data-result]');
+      if (option) selectPosition(Number(option.dataset.result));
+    };
+    positionQuery.onkeydown = event => {
+      if (event.key === 'Escape' && !suggestions.hidden) {
+        event.preventDefault();
+        showSuggestions(false);
+      } else if (event.key === 'Enter' && !suggestions.hidden) {
+        event.preventDefault();
+        selectPosition(activeIndex < 0 ? 0 : activeIndex);
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (suggestions.hidden) drawPositions();
+        if (suggestions.hidden) return;
+        event.preventDefault();
+        suggestions.children[activeIndex]?.setAttribute('aria-selected', 'false');
+        activeIndex = activeIndex < 0 && event.key === 'ArrowUp' ? matches.length - 1 :
+          Math.max(0, Math.min(matches.length - 1, activeIndex + (event.key === 'ArrowDown' ? 1 : -1)));
+        const option = suggestions.children[activeIndex];
+        option.setAttribute('aria-selected', 'true');
+        positionQuery.setAttribute('aria-activedescendant', option.id);
+        option.scrollIntoView({ block: 'nearest' });
+      }
+    };
   }
   form.onsubmit = event => {
     event.preventDefault();
@@ -842,7 +903,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       const nextId = activeEstimate.rows.reduce((max, item) => Math.max(max, Number(item.id)), 0) + 1;
       row = makeRow(String(nextId), name, fields.get('category'), fields.get('unit'),
         Number(fields.get('volume')), null, null, null);
-      const position = chosenPosition();
+      const position = chosenPosition;
       const matchesCatalog = position && position.name === row.name && position.unit === row.unit && position.category === row.category;
       if (row.category !== 'Механизмы') {
         const selected = dialog.querySelector('#base-price');
