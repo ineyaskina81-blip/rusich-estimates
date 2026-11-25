@@ -33,6 +33,7 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .catalog-fields legend{font-weight:700;margin-bottom:8px}
 .catalog-fields .note{margin:8px 0 0;overflow-wrap:anywhere}
 .catalog-fields select{max-width:100%}
+#catalog-position-price:empty{display:none}
 .section-tools{display:flex;flex-wrap:wrap;gap:8px}
 .position-structure{margin:16px 0 0}
 .position-structure .fields{margin-bottom:8px}
@@ -558,6 +559,7 @@ function renderCard() {
 }
 
 const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
+const previewPriceKinds = { ...priceKinds, history: 'Историческая цена' };
 const baseCatalogPrice = row => row?.basePrice ?? row?.baseWorkPrice;
 const hourlyUnit = unit => ['ч', 'маш.-ч'].includes(unit);
 
@@ -581,7 +583,13 @@ function priceOrigin(price) {
 }
 
 function priceOption(price) {
-  return [priceKinds[price.kind], money(price.value), price.date, price.vat, price.code].filter(Boolean).join(' · ');
+  return [money(price.value), previewPriceKinds[price.kind], price.date, price.vat, price.code].filter(Boolean).join(' · ');
+}
+
+function positionPriceLabel(position) {
+  const purchase = position.category === 'Механизмы' ? pricesForPosition(position, 2)[0] : null;
+  const price = purchase ?? pricesForPosition(position, 3)[0];
+  return price ? money(price.value) + '/' + position.unit + ' · ' + previewPriceKinds[price.kind] : 'Цена отсутствует';
 }
 
 function pricePicker(prices) {
@@ -598,6 +606,7 @@ function positionPicker() {
   return '<fieldset class="catalog-fields"><legend>Выбор из справочника</legend><div class="fields">' +
     '<label>Поиск по названию или коду<input id="catalog-query" type="search"></label>' +
     '<label>Позиция<select id="catalog-position"></select></label></div>' +
+    '<p class="note" id="catalog-position-price" role="status"></p>' +
     '<p class="note" id="catalog-matches" role="status"></p></fieldset>';
 }
 
@@ -797,13 +806,15 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       });
       positionSelect.innerHTML = '<option value="">Выберите позицию</option>' +
         matches.slice(0, 50).map(({ position, id }) => '<option value="' + id + '">' +
-          esc(position.name + ' · ' + position.unit + ' · ' + position.code) + '</option>').join('');
+          esc(positionPriceLabel(position) + ' · ' + position.name + ' · ' + position.code) + '</option>').join('');
+      dialog.querySelector('#catalog-position-price').textContent = '';
       dialog.querySelector('#catalog-matches').textContent = 'Показано ' + Math.min(matches.length, 50) + ' из ' + matches.length;
       renderBaseRate();
     }
     positionQuery.oninput = drawPositions;
     positionSelect.onchange = () => {
       const position = chosenPosition();
+      dialog.querySelector('#catalog-position-price').textContent = position ? positionPriceLabel(position) : '';
       if (!position) {
         renderBaseRate();
         return;
