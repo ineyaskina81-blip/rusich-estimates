@@ -33,6 +33,9 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .catalog-fields legend{font-weight:700;margin-bottom:8px}
 .catalog-fields .note{margin:8px 0 0;overflow-wrap:anywhere}
 .catalog-fields select{max-width:100%}
+.section-tools{display:flex;flex-wrap:wrap;gap:8px}
+.position-structure{margin:16px 0 0}
+.position-structure .fields{margin-bottom:8px}
 .delete-row{color:#8e312a;margin-top:12px}
 </style>
 </head>
@@ -66,6 +69,23 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
           <label>Виды работ (необязательно)<input name="scope" maxlength="160"></label>
         </div>
         <button class="btn primary" type="submit">Создать смету</button>
+      </form>
+    </div>
+  </div>
+</dialog>
+<dialog id="estimate-section" aria-labelledby="estimate-section-title">
+  <div class="drawer">
+    <header class="drawer-head">
+      <h2 id="estimate-section-title">Добавить раздел или подраздел</h2>
+      <button class="btn drawer-close" id="close-estimate-section" type="button" aria-label="Закрыть форму">×</button>
+    </header>
+    <div class="drawer-body">
+      <form class="action" id="estimate-section-form">
+        <div class="fields">
+          <label>Входит в раздел<select name="parent"></select></label>
+          <label>Наименование<input name="name" maxlength="160" required></label>
+        </div>
+        <button class="btn primary" type="submit">Добавить</button>
       </form>
     </div>
   </div>
@@ -305,9 +325,12 @@ const dialog = document.querySelector('#position');
 const toast = document.querySelector('#toast');
 const newEstimateDialog = document.querySelector('#new-estimate');
 const estimateForm = document.querySelector('#estimate-form');
+const sectionDialog = document.querySelector('#estimate-section');
+const sectionForm = document.querySelector('#estimate-section-form');
 const listFilters = { query: '', status: 'all' };
 let cardFilters = { query: '', category: 'all', role: 'all' };
 let activeEstimate;
+let sectionFilter = '';
 let drawerReturn;
 let toastTimer;
 const numbers = new Intl.NumberFormat('ru-RU');
@@ -418,6 +441,29 @@ function lineAmountCents(volume, unitPrice) {
   return Math.round((amount + Number.EPSILON * amount) * 100);
 }
 
+function sectionOptions(emptyLabel, selected = '') {
+  const option = (id, label) => '<option value="' + esc(id) + '"' +
+    (id === selected ? ' selected' : '') + '>' + esc(label) + '</option>';
+  return option('', emptyLabel) + (activeEstimate.sections ?? []).map(section =>
+    option(section.id, section.name) + section.children.map(child =>
+      option(section.id + '/' + child.id, section.name + ' → ' + child.name)).join('')
+  ).join('');
+}
+
+function sectionLabel(estimate, key) {
+  if (!key) return '';
+  const [sectionId, subsectionId] = key.split('/');
+  const section = estimate.sections?.find(item => item.id === sectionId);
+  if (!section) return '';
+  const child = section.children.find(item => item.id === subsectionId);
+  return child ? section.name + ' → ' + child.name : section.name;
+}
+
+function structureField(selected = '') {
+  return '<label>Раздел или подраздел сметы<select name="structure">' +
+    sectionOptions('Без раздела', selected) + '</select></label>';
+}
+
 function renderCard() {
   const estimate = activeEstimate;
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
@@ -430,10 +476,13 @@ function renderCard() {
     stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money(approvedTotalCents / 100), 'По согласованным позициям') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
-    '<button class="btn primary compact" id="add" type="button">+ Добавить позицию</button></div>' +
+    '<div class="section-tools"><button class="btn" id="add-estimate-section" type="button">+ Раздел / подраздел</button>' +
+    '<button class="btn primary compact" id="add" type="button">+ Добавить позицию</button></div></div>' +
     '<div class="tabs" role="group" aria-label="Раздел сметы" id="categories"></div><div class="toolbar">' +
     searchField(cardFilters.query, 'Поиск по названию позиции') +
     filterSelect('role', 'Ответственный за следующий шаг', 'Все ответственные', [...steps.map(step => step.role), 'Готово'], cardFilters.role) +
+    (estimate.sections?.length ? '<select id="section-filter" aria-label="Раздел или подраздел сметы">' +
+      sectionOptions('Все разделы', sectionFilter) + '</select>' : '') +
     '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div><div id="results"></div></section>';
   const draw = () => {
     const tabs = document.querySelector('#categories');
@@ -445,15 +494,19 @@ function renderCard() {
     const visible = estimate.rows.filter(row => {
       const step = steps[nextStep(row)];
       return (cardFilters.category === 'all' || cardFilters.category === row.category) &&
-        (cardFilters.role === 'all' || cardFilters.role === (step ? step.role : 'Готово')) && rowMatches(row, cardFilters.query);
+        (cardFilters.role === 'all' || cardFilters.role === (step ? step.role : 'Готово')) &&
+        (!sectionFilter || row.structure === sectionFilter || row.structure?.startsWith(sectionFilter + '/')) &&
+        rowMatches(row, cardFilters.query);
     });
     const rows = visible.map(row => {
       const step = steps[nextStep(row)];
       const basePrice = baseCatalogPrice(row);
       const unitPrice = row.customerPrice ?? basePrice?.value;
       const amountCents = lineAmountCents(row.volume, unitPrice);
+      const label = sectionLabel(estimate, row.structure);
       return '<tr><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
-        '</button><span class="secondary">' + esc(row.category) + '</span></td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
+        '</button><span class="secondary">' + esc(row.category) + '</span>' +
+        (label ? '<span class="secondary">' + esc(label) + '</span>' : '') + '</td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
         '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
         money(unitPrice) +
         (row.customerPrice == null && basePrice ? '<span class="secondary">Из справочника</span>' : '') +
@@ -475,7 +528,25 @@ function renderCard() {
   };
   document.querySelector('#query').oninput = event => { cardFilters.query = event.target.value; draw(); };
   document.querySelector('#role').onchange = event => { cardFilters.role = event.target.value; draw(); };
-  document.querySelector('#clear').onclick = () => { cardFilters = { query: '', category: 'all', role: 'all' }; renderCard(); document.querySelector('#query').focus(); };
+  if (estimate.sections?.length) {
+    document.querySelector('#section-filter').onchange = event => { sectionFilter = event.target.value; draw(); };
+  }
+  document.querySelector('#clear').onclick = () => {
+    sectionFilter = '';
+    cardFilters = { query: '', category: 'all', role: 'all' };
+    renderCard();
+    document.querySelector('#query').focus();
+  };
+  document.querySelector('#add-estimate-section').onclick = () => {
+    sectionForm.reset();
+    const parent = sectionForm.elements.namedItem('parent');
+    parent.innerHTML = '<option value="">Верхний уровень (раздел)</option>' +
+      (estimate.sections ?? []).map(section =>
+        '<option value="' + esc(section.id) + '">' + esc(section.name) + '</option>').join('');
+    sectionForm.elements.namedItem('name').setCustomValidity('');
+    sectionDialog.showModal();
+    sectionForm.elements.namedItem('name').focus();
+  };
   document.querySelector('#results').onclick = event => {
     const button = event.target.closest('[data-row]');
     if (button) openDrawer(estimate.rows.find(row => row.id === button.dataset.row));
@@ -555,7 +626,8 @@ function stepForm(index, row, prices, canSkipSupply) {
   ];
   return '<form class="action" id="step-form"><h3>Действие · ' + steps[index].role + '</h3><p class="note">' + descriptions[index] +
     '</p>' + (index === 0 ? positionPicker() : pricePicker(prices)) +
-    '<div class="fields">' + fields[index]() + '</div>' +
+    '<div class="fields">' + fields[index]() +
+    (index === 0 && activeEstimate.sections?.length ? structureField(sectionFilter) : '') + '</div>' +
     (index === 0 ? '<div id="base-rate"></div><p class="note" id="base-rate-error" role="alert"></p>' : '') +
     '<button class="btn primary" type="submit">' + steps[index].action + '</button>' +
     (canSkipSupply ? '<button class="btn" type="button" id="skip-supply">Перейти к цене заказчика без цены ОМТС</button>' : '') +
@@ -598,6 +670,9 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     (status ? '<p class="handoff" id="drawer-status" role="status">' + esc(status) + '</p>' : '') +
     stepForm(index, row, prices, canSkipSupply) +
     (index === 4 ? '<button class="btn" id="adjust-customer-price" type="button">Скорректировать цену заказчику</button>' : '') +
+    (row && activeEstimate.sections?.length ?
+      '<form class="action position-structure" id="change-structure"><div class="fields">' +
+      structureField(row.structure) + '</div><button class="btn" type="submit">Сохранить раздел</button></form>' : '') +
     (row ? '<button class="btn delete-row" id="delete-position" type="button">Удалить строку</button>' : '') +
     '</div></div>';
   for (const button of dialog.querySelectorAll('[data-close-drawer]')) {
@@ -613,6 +688,16 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       renderCard();
       document.querySelector('#add').focus();
       notify(saved ? 'Строка удалена.' : 'Строка удалена до обновления страницы.');
+    };
+  }
+  const structureForm = dialog.querySelector('#change-structure');
+  if (structureForm) {
+    structureForm.onsubmit = event => {
+      event.preventDefault();
+      row.structure = new FormData(structureForm).get('structure');
+      const saved = save();
+      renderCard();
+      notify(saved ? 'Раздел позиции сохранён.' : 'Раздел изменён до обновления страницы.');
     };
   }
   const adjustPrice = dialog.querySelector('#adjust-customer-price');
@@ -757,6 +842,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
         row.basePrice = { ...price };
       }
       if (matchesCatalog) row.catalogCode = position.code;
+      row.structure = fields.get('structure') || '';
       activeEstimate.rows.push(row);
       cardFilters = { query: '', category: row.category, role: 'all' };
     } else {
@@ -840,12 +926,44 @@ estimateForm.onsubmit = event => {
   notify(saved ? 'Смета № ' + estimate.id + ' создана.' : 'Локальное хранилище недоступно. Смета доступна до закрытия или обновления страницы.');
 };
 
+document.querySelector('#close-estimate-section').onclick = () => sectionDialog.close();
+sectionForm.elements.namedItem('name').oninput = event => event.target.setCustomValidity('');
+sectionForm.elements.namedItem('parent').onchange = () => sectionForm.elements.namedItem('name').setCustomValidity('');
+sectionForm.onsubmit = event => {
+  event.preventDefault();
+  if (!activeEstimate) return;
+  const fields = new FormData(sectionForm);
+  const name = fields.get('name').trim();
+  const sections = activeEstimate.sections ??= [];
+  const parent = sections.find(section => section.id === fields.get('parent'));
+  const siblings = parent ? parent.children : sections;
+  const duplicate = siblings.some(item => item.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'));
+  if (!name || duplicate) {
+    const field = sectionForm.elements.namedItem('name');
+    field.setCustomValidity(duplicate ? 'Такое наименование уже есть на этом уровне.' : 'Введите наименование.');
+    field.reportValidity();
+    return;
+  }
+  const item = { id: String(siblings.length + 1), name };
+  siblings.push(parent ? item : { ...item, children: [] });
+  const saved = save();
+  sectionDialog.close();
+  renderCard();
+  document.querySelector('#add-estimate-section').focus();
+  notify((parent ? 'Подраздел добавлен.' : 'Раздел добавлен.') +
+    (saved ? '' : ' Изменение доступно до обновления страницы.'));
+};
+
 function renderScreen(focusHeading = false) {
   const match = location.hash.match(/^#estimate\/(.+)$/);
   const estimate = match ? estimates.find(item => item.id === match[1]) : null;
   if (dialog.open) dialog.close();
   if (newEstimateDialog.open) newEstimateDialog.close();
-  if (estimate !== activeEstimate) cardFilters = { query: '', category: 'all', role: 'all' };
+  if (sectionDialog.open) sectionDialog.close();
+  if (estimate !== activeEstimate) {
+    cardFilters = { query: '', category: 'all', role: 'all' };
+    sectionFilter = '';
+  }
   activeEstimate = estimate;
   if (estimate) renderCard();
   else renderList();
