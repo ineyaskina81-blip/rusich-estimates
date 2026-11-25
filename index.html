@@ -498,13 +498,15 @@ function renderCard() {
         (!sectionFilter || row.structure === sectionFilter || row.structure?.startsWith(sectionFilter + '/')) &&
         rowMatches(row, cardFilters.query);
     });
+    const positionNumbers = new Map(estimate.rows.map((row, index) => [row.id, index + 1]));
     const rows = visible.map(row => {
       const step = steps[nextStep(row)];
       const basePrice = baseCatalogPrice(row);
       const unitPrice = row.customerPrice ?? basePrice?.value;
       const amountCents = lineAmountCents(row.volume, unitPrice);
       const label = sectionLabel(estimate, row.structure);
-      return '<tr><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
+      return '<tr><td class="num">' + positionNumbers.get(row.id) +
+        '</td><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
         '</button><span class="secondary">' + esc(row.category) + '</span>' +
         (label ? '<span class="secondary">' + esc(label) + '</span>' : '') + '</td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
         '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
@@ -516,7 +518,7 @@ function renderCard() {
         '</span></td><td>' + (step ? step.role : '—') + '</td></tr>';
     });
     const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Нажмите «Добавить позицию».';
-    document.querySelector('#results').innerHTML = table(['Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
+    document.querySelector('#results').innerHTML = table(['№', 'Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
       '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimate.rows.length + '</div>';
   };
   document.querySelector('#categories').onclick = event => {
