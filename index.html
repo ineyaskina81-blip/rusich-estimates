@@ -25,9 +25,9 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 #catalog-file:focus-visible + .catalog-file-label{outline:3px solid #478468;outline-offset:3px}
 #catalog-file:disabled + .catalog-file-label{opacity:.65;cursor:wait}
 .catalog-feedback{margin:0;text-align:right;overflow-wrap:anywhere}
-.catalog-feedback:empty,#work-rate:empty,#work-rate-error:empty{display:none}
-#work-rate{margin:12px 0}
-#work-rate-error{color:#8e312a}
+.catalog-feedback:empty,#base-rate:empty,#base-rate-error:empty{display:none}
+#base-rate{margin:12px 0}
+#base-rate-error{color:#8e312a}
 .top:has(.catalog-feedback:not(:empty)){height:auto;min-height:66px;padding-top:8px;padding-bottom:8px}
 .catalog-fields{margin:0 0 18px;padding:0;border:0;min-width:0}
 .catalog-fields legend{font-weight:700;margin-bottom:8px}
@@ -331,7 +331,7 @@ function nextEstimateNumber(date) {
 function nextStep(row) {
   if (!row.name || row.volume == null) return 0;
   if (row.category === 'Механизмы' && row.hours == null) return 1;
-  if (row.category !== 'Работы' && row.supplyPrice == null && !row.supplySkipped) return 2;
+  if (row.category === 'Механизмы' && row.supplyPrice == null && !row.supplySkipped) return 2;
   if (row.customerPrice == null) return 3;
   return 4;
 }
@@ -446,8 +446,8 @@ function renderCard() {
       return '<tr><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
         '</button><span class="secondary">' + esc(row.category) + '</span></td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
         '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
-        money(row.customerPrice ?? row.baseWorkPrice?.value) +
-        (row.customerPrice == null && row.baseWorkPrice ? '<span class="secondary">Из справочника</span>' : '') + '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
+        money(row.customerPrice ?? baseCatalogPrice(row)?.value) +
+        (row.customerPrice == null && baseCatalogPrice(row) ? '<span class="secondary">Из справочника</span>' : '') + '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
         '</span></td><td>' + (step ? step.role : '—') + '</td></tr>';
     });
     const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Нажмите «Добавить позицию».';
@@ -473,6 +473,7 @@ function renderCard() {
 }
 
 const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
+const baseCatalogPrice = row => row?.basePrice ?? row?.baseWorkPrice;
 const hourlyUnit = unit => ['ч', 'маш.-ч'].includes(unit);
 
 function availablePrices(row, index) {
@@ -518,10 +519,10 @@ function positionPicker() {
 function stepForm(index, row, prices, canSkipSupply) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
-    'Выберите позицию и укажите объём. Для работ выберите готовую расценку из справочника. Для механизмов часы указывает главный инженер.',
+    'Выберите позицию и укажите объём. Для работ, материалов, доставки и прочего выберите готовую цену из справочника. Часы работы техники указывает главный инженер.',
     'Укажите общее количество часов работы механизма по этой позиции.',
     'Выберите закупочную цену из справочника или введите цену ОМТС.',
-    row?.baseWorkPrice ? 'Подтвердите цену из справочника или укажите скорректированную цену для заказчика.' :
+    baseCatalogPrice(row) ? 'Подтвердите цену из справочника или укажите скорректированную цену для заказчика.' :
       'Выберите расценку или введите цену для заказчика, затем подтвердите её.'
   ];
   const numericField = (label, name) =>
@@ -543,24 +544,25 @@ function stepForm(index, row, prices, canSkipSupply) {
   return '<form class="action" id="step-form"><h3>Действие · ' + steps[index].role + '</h3><p class="note">' + descriptions[index] +
     '</p>' + (index === 0 ? positionPicker() : pricePicker(prices)) +
     '<div class="fields">' + fields[index]() + '</div>' +
-    (index === 0 ? '<div id="work-rate"></div><p class="note" id="work-rate-error" role="alert"></p>' : '') +
+    (index === 0 ? '<div id="base-rate"></div><p class="note" id="base-rate-error" role="alert"></p>' : '') +
     '<button class="btn primary" type="submit">' + steps[index].action + '</button>' +
     (canSkipSupply ? '<button class="btn" type="button" id="skip-supply">Перейти к цене заказчика без цены ОМТС</button>' : '') +
     '</form>';
 }
 
-function renderDrawer(row, status = '', editingWorkPrice = false) {
-  const index = editingWorkPrice ? 3 : row ? nextStep(row) : 0;
-  const prices = index === 2 || (index === 3 && !row.baseWorkPrice) ? availablePrices(row, index) : [];
+function renderDrawer(row, status = '', editingCustomerPrice = false) {
+  const index = editingCustomerPrice ? 3 : row ? nextStep(row) : 0;
+  const basePrice = baseCatalogPrice(row);
+  const prices = index === 2 || (index === 3 && !basePrice) ? availablePrices(row, index) : [];
   const canSkipSupply = index === 2 && availablePrices(row, 3).length > 0;
   const number = index === 0 ? 'Новая позиция' : 'Позиция сметы № ' + activeEstimate.id;
   const values = row ? [
     ['Раздел', row.category], ['Объём', quantity(row.volume) + ' ' + row.unit],
     ...(row.category === 'Механизмы' ? [['Часы механизма', row.hours == null ? '—' : quantity(row.hours) + ' ч']] : []),
     ['Цена ОМТС / ед.', row.supplySkipped ? 'Цена ОМТС не указана' : money(row.supplyPrice)],
-    ...(row.baseWorkPrice ? [
-      ['Цена из справочника / ед.', money(row.baseWorkPrice.value)],
-      ['Расценка из справочника', priceOrigin(row.baseWorkPrice)]
+    ...(basePrice ? [
+      ['Цена из справочника / ед.', money(basePrice.value)],
+      ['Расценка из справочника', priceOrigin(basePrice)]
     ] : []),
     ['Цена заказчику / ед.', money(row.customerPrice)],
     ...(row.supplyRate ? [['Источник цены ОМТС', row.supplyRate]] : []),
@@ -568,7 +570,7 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
   ] : [];
   const route = steps.map((step, position) => {
     const skipped = row && ((position === 1 && row.category !== 'Механизмы') ||
-      (position === 2 && (row.category === 'Работы' || row.supplySkipped)));
+      (position === 2 && (row.category !== 'Механизмы' || row.supplySkipped)));
     return '<li' + (position === index ? ' aria-current="step"' : '') + '><span class="step-icon" aria-hidden="true">' +
       (skipped ? '–' : position < index ? '✓' : position + 1) + '</span><span>' + step.role + '</span><span class="route-status">' +
       (skipped ? 'Не требуется' : position === index ? 'Сейчас' : position < index ? 'Выполнено' : 'Ожидает') + '</span></li>';
@@ -583,7 +585,7 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
       '<div><dt>' + label + '</dt><dd>' + esc(value) + '</dd></div>').join('') + '</dl>' : '') +
     (status ? '<p class="handoff" id="drawer-status" role="status">' + esc(status) + '</p>' : '') +
     stepForm(index, row, prices, canSkipSupply) +
-    (index === 4 && row.category === 'Работы' ? '<button class="btn" id="adjust-work-price" type="button">Скорректировать цену работы</button>' : '') +
+    (index === 4 ? '<button class="btn" id="adjust-customer-price" type="button">Скорректировать цену заказчику</button>' : '') +
     (row ? '<button class="btn delete-row" id="delete-position" type="button">Удалить строку</button>' : '') +
     '</div></div>';
   for (const button of dialog.querySelectorAll('[data-close-drawer]')) {
@@ -601,7 +603,7 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
       notify(saved ? 'Строка удалена.' : 'Строка удалена до обновления страницы.');
     };
   }
-  const adjustPrice = dialog.querySelector('#adjust-work-price');
+  const adjustPrice = dialog.querySelector('#adjust-customer-price');
   if (adjustPrice) {
     adjustPrice.onclick = () => {
       renderDrawer(row, '', true);
@@ -615,15 +617,15 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
     copyPrice.onclick = () => {
       const field = form.elements.namedItem('customerPrice');
       field.value = row.supplyPrice;
+      const picker = dialog.querySelector('#catalog-price');
+      if (picker) picker.value = '';
       field.focus();
     };
   }
   if (index === 1 && hourlyUnit(row.unit)) form.elements.namedItem('hours').value = row.volume;
   const priceSelect = dialog.querySelector('#catalog-price');
   const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
-  if (index === 3 && (row.customerPrice != null || row.baseWorkPrice)) {
-    priceField.value = row.customerPrice ?? row.baseWorkPrice.value;
-  }
+  if (index === 3) priceField.value = row.customerPrice ?? basePrice?.value ?? row.supplyPrice ?? '';
   const chosenPrice = () => priceSelect && prices[priceSelect.value];
   if (priceSelect) {
     priceSelect.onchange = () => {
@@ -634,6 +636,11 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
         price.kind === 'history' ? 'Архивная цена. Проверьте применимость к текущей смете.' : ''
       ].filter(Boolean).join(' · ') : '';
     };
+    if (index === 3 && row.customerPrice == null && row.category === 'Механизмы' &&
+      (prices[0].kind === 'customer' || row.supplyPrice == null)) {
+      priceSelect.value = '0';
+      priceSelect.onchange();
+    }
   }
   if (canSkipSupply) {
     dialog.querySelector('#skip-supply').onclick = () => {
@@ -648,21 +655,21 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
   const positionSelect = dialog.querySelector('#catalog-position');
   const positionQuery = dialog.querySelector('#catalog-query');
   const chosenPosition = () => positionSelect && catalog.positions[positionSelect.value || -1];
-  const workRate = dialog.querySelector('#work-rate');
-  const workRateError = dialog.querySelector('#work-rate-error');
-  let workPrices = [];
-  function renderWorkRate() {
+  const baseRate = dialog.querySelector('#base-rate');
+  const baseRateError = dialog.querySelector('#base-rate-error');
+  let basePrices = [];
+  function renderBaseRate() {
     const position = chosenPosition();
-    workRateError.textContent = '';
-    workPrices = position?.category === 'Работы' && categorySelect.value === 'Работы'
-      ? pricesForPosition(position, 3) : [];
-    workRate.innerHTML = workPrices.length
-      ? '<label>Расценка за единицу<select id="work-price" required>' +
-        workPrices.map((price, i) => '<option value="' + i + '">' + esc(priceOption(price)) + '</option>').join('') +
+    baseRateError.textContent = '';
+    const needsCatalogPrice = categorySelect.value && categorySelect.value !== 'Механизмы';
+    basePrices = needsCatalogPrice && position?.category === categorySelect.value ? pricesForPosition(position, 3) : [];
+    baseRate.innerHTML = basePrices.length
+      ? '<label>Расценка за единицу<select id="base-price" required>' +
+        basePrices.map((price, i) => '<option value="' + i + '">' + esc(priceOption(price)) + '</option>').join('') +
         '</select></label>'
-      : categorySelect.value === 'Работы'
-        ? '<p class="note">' + (position?.category === 'Работы' ? 'У этой работы нет доступной цены. Выберите другую позицию.' :
-          'Выберите работу из загруженного справочника.') + '</p>'
+      : needsCatalogPrice
+        ? '<p class="note">' + (position?.category === categorySelect.value ? 'У этой позиции нет доступной цены. Выберите другую позицию.' :
+          'Выберите позицию из загруженного справочника.') + '</p>'
         : '';
   }
   const categorySelect = form.elements.namedItem('category');
@@ -674,10 +681,9 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
       if (selection >= 0) {
         form.elements.namedItem('unit').value = position?.category === categorySelect.value ? position.unit : defaultUnits[selection];
       }
-      renderWorkRate();
+      renderBaseRate();
       form.querySelector('button[type="submit"]').textContent =
-        categorySelect.value === 'Работы' ? steps[2].action :
-        categorySelect.value === 'Механизмы' || selection < 0 ? steps[0].action : steps[1].action;
+        categorySelect.value === 'Механизмы' || selection < 0 ? steps[0].action : steps[2].action;
     };
     categorySelect.onchange = setUnit;
     setUnit();
@@ -694,13 +700,13 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
         matches.slice(0, 50).map(({ position, id }) => '<option value="' + id + '">' +
           esc(position.name + ' · ' + position.unit + ' · ' + position.code) + '</option>').join('');
       dialog.querySelector('#catalog-matches').textContent = 'Показано ' + Math.min(matches.length, 50) + ' из ' + matches.length;
-      renderWorkRate();
+      renderBaseRate();
     }
     positionQuery.oninput = drawPositions;
     positionSelect.onchange = () => {
       const position = chosenPosition();
       if (!position) {
-        renderWorkRate();
+        renderBaseRate();
         return;
       }
       const name = form.elements.namedItem('name');
@@ -728,15 +734,15 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
         Number(fields.get('volume')), null, null, null);
       const position = chosenPosition();
       const matchesCatalog = position && position.name === row.name && position.unit === row.unit && position.category === row.category;
-      if (row.category === 'Работы') {
-        const selected = dialog.querySelector('#work-price');
-        const price = matchesCatalog && selected && workPrices[selected.value];
+      if (row.category !== 'Механизмы') {
+        const selected = dialog.querySelector('#base-price');
+        const price = matchesCatalog && selected && basePrices[selected.value];
         if (!price) {
-          workRateError.textContent = 'Выберите работу и готовую расценку из справочника.';
+          baseRateError.textContent = 'Выберите позицию и готовую расценку из справочника.';
           (selected || positionQuery || document.querySelector('#load-catalog')).focus();
           return;
         }
-        row.baseWorkPrice = { ...price };
+        row.basePrice = { ...price };
       }
       if (matchesCatalog) row.catalogCode = position.code;
       activeEstimate.rows.push(row);
@@ -746,12 +752,18 @@ function renderDrawer(row, status = '', editingWorkPrice = false) {
       row[key] = Number(fields.get(key));
       if (index === 1 && hourlyUnit(row.unit)) row.volume = row.hours;
       const price = chosenPrice();
-      if (index === 3 && row.baseWorkPrice) {
-        row.customerRate = row.customerPrice === row.baseWorkPrice.value
-          ? priceOrigin(row.baseWorkPrice) : 'Цена скорректирована коммерческим директором';
+      if (index === 3 && basePrice) {
+        row.customerRate = row.customerPrice === basePrice.value
+          ? priceOrigin(basePrice) : 'Цена скорректирована коммерческим директором';
+      } else if (index === 3 && price && row.category === 'Механизмы') {
+        row.basePrice = { ...price };
+        row.customerRate = row.customerPrice === price.value
+          ? priceOrigin(price) : 'Цена скорректирована коммерческим директором';
       } else if (price && price.value === row[key]) {
         row[index === 2 ? 'supplyRate' : 'customerRate'] = priceOrigin(price);
-      } else if (editingWorkPrice) {
+      } else if (index === 3 && row.supplyPrice != null && row.customerPrice === row.supplyPrice) {
+        row.customerRate = 'По закупочному тарифу ОМТС';
+      } else if (editingCustomerPrice) {
         row.customerRate = 'Цена скорректирована коммерческим директором';
       }
       if (cardFilters.role !== 'all') cardFilters.role = 'all';
