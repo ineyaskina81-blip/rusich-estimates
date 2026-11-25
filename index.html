@@ -52,6 +52,8 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .group-controls,.row-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
 .group-controls .btn,.row-controls .btn{min-height:32px;padding:5px 9px}
 .entry-target{margin:0 0 10px;color:var(--muted)}
+.estimate-totals{margin-top:16px}
+.estimate-totals .detail{margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}
 .inline-position{padding:18px 22px;border-top:1px solid var(--line)}
 .inline-position .action{margin:0;padding:0;border-top:0}
 .inline-position .action .fields{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
@@ -493,6 +495,20 @@ function lineAmountCents(volume, unitPrice) {
   return Math.round((amount + Number.EPSILON * amount) * 100);
 }
 
+const estimateVatRate = 22;
+const vatCategories = new Set(['Работы', 'Механизмы', 'Доставка']);
+
+function confirmedTotals(rows) {
+  return rows.reduce((totals, row) => {
+    const amount = lineAmountCents(row.volume, row.customerPrice);
+    totals.subtotal += amount;
+    if (vatCategories.has(row.category) && (row.customerVat ?? baseCatalogPrice(row)?.vat) !== 'С НДС') {
+      totals.vatBase += amount;
+    }
+    return totals;
+  }, { subtotal: 0, vatBase: 0 });
+}
+
 function sectionOptions(emptyLabel, selected = '') {
   const option = (id, label) => '<option value="' + esc(id) + '"' +
     (id === selected ? ' selected' : '') + '>' + esc(label) + '</option>';
@@ -603,13 +619,14 @@ function renderCard(resetEntry = false) {
     3: waiting ? 'Проверьте цены для заказчика. Осталось: ' + waiting + '.' : 'Все цены для заказчика подтверждены.'
   };
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
-  const approvedTotalCents = ready.reduce((total, row) => total + lineAmountCents(row.volume, row.customerPrice), 0);
+  const { subtotal, vatBase } = confirmedTotals(ready);
+  const vatCents = Math.round(vatBase * estimateVatRate / 100);
   const subtitle = [estimate.scope, estimate.client].filter(Boolean).join(' · ');
   crumb.innerHTML = '<a href="#estimates">Сметы</a><span aria-hidden="true">/</span><span aria-current="page">№ ' + estimate.id + '</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
     '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div></div>' +
     '<section class="stats" aria-label="Сводка по позициям">' + stat('Подтверждено позиций', ready.length + ' из ' + estimate.rows.length) +
-    stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money(approvedTotalCents / 100), 'По согласованным позициям') + '</section>' +
+    stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money((subtotal + vatCents) / 100), 'С учётом начисленного НДС') + '</section>' +
     '<section class="panel panel-head workflow-panel" aria-labelledby="workflow-title"><div>' +
     '<h2 id="workflow-title" tabindex="-1">Этап сметы · ' + steps[stage].role + '</h2><p class="note">' + stageText[stage] + '</p></div>' +
     (stage === 3 ? '' : '<button class="btn primary" id="advance-estimate" type="button"' +
@@ -625,7 +642,12 @@ function renderCard(resetEntry = false) {
       sectionOptions('Все разделы', sectionFilter) + '</select>' : '') +
     '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div><div id="results"></div>' +
     (stage === 0 ? '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
-      '<div id="inline-position-content"></div></section>' : '') + '</section>';
+      '<div id="inline-position-content"></div></section>' : '') + '</section>' +
+    '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
+    '<h2 id="estimate-totals-title">Итог по подтверждённым позициям</h2><dl class="detail">' +
+    '<div><dt>Сумма строк</dt><dd>' + money(subtotal / 100) + '</dd></div>' +
+    '<div><dt>НДС ' + estimateVatRate + '% на работы, механизмы и доставку</dt><dd>' + money(vatCents / 100) + '</dd></div>' +
+    '<div><dt>Итого к оплате</dt><dd>' + money((subtotal + vatCents) / 100) + '</dd></div></dl></section>';
   const draw = () => {
     const tabs = document.querySelector('#categories');
     tabs.innerHTML = [['all', 'Все позиции'], ...categories.map(category => [category, category])].map(([value, label]) => {
@@ -1183,6 +1205,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         if (price && price.code !== previousRate?.code) {
           row.customerPrice = null;
           delete row.customerRate;
+          delete row.customerVat;
         }
       }
       if (price) row.basePrice = { ...price };
@@ -1205,6 +1228,11 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       }
       if (index === 2) delete row.supplySkipped;
       const price = chosenPrice();
+      if (index === 2) row.supplyVat = price?.value === row.supplyPrice ? price.vat : null;
+      if (index === 3) {
+        row.customerVat = basePrice?.vat ?? price?.vat ??
+          (row.customerPrice === row.supplyPrice ? row.supplyVat : row.customerVat) ?? null;
+      }
       if (index === 3 && basePrice) {
         row.customerRate = row.customerPrice === basePrice.value
           ? priceOrigin(basePrice) : 'Цена скорректирована коммерческим директором';
