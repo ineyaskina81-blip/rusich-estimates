@@ -39,7 +39,11 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .catalog-option:hover,.catalog-option[aria-selected=true]{background:var(--soft)}
 .catalog-option strong,.catalog-option span{display:block}
 .catalog-option span{font-size:13px;color:var(--muted)}
-.section-tools{display:flex;flex-wrap:wrap;gap:8px}
+.inline-position{padding:18px 22px;border-top:1px solid var(--line)}
+.inline-position .action{margin:0;padding:0;border-top:0}
+.inline-position .action .fields{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+.inline-position .catalog-fields .fields{grid-template-columns:minmax(0,1fr)}
+#inline-structure:empty{display:none}
 .position-structure{margin:16px 0 0}
 .position-structure .fields{margin-bottom:8px}
 .delete-row{color:#8e312a;margin-top:12px}
@@ -470,8 +474,9 @@ function structureField(selected = '') {
     sectionOptions('Без раздела', selected) + '</select></label>';
 }
 
-function renderCard() {
+function renderCard(resetEntry = false) {
   const estimate = activeEstimate;
+  const previousEntry = document.querySelector('#inline-position-content');
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
   const approvedTotalCents = ready.reduce((total, row) => total + lineAmountCents(row.volume, row.customerPrice), 0);
   const subtitle = [estimate.scope, estimate.client].filter(Boolean).join(' · ');
@@ -482,14 +487,15 @@ function renderCard() {
     stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money(approvedTotalCents / 100), 'По согласованным позициям') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
-    '<div class="section-tools"><button class="btn" id="add-estimate-section" type="button">+ Раздел / подраздел</button>' +
-    '<button class="btn primary compact" id="add" type="button">+ Добавить позицию</button></div></div>' +
+    '<button class="btn" id="add-estimate-section" type="button">+ Раздел / подраздел</button></div>' +
     '<div class="tabs" role="group" aria-label="Раздел сметы" id="categories"></div><div class="toolbar">' +
     searchField(cardFilters.query, 'Поиск по названию позиции') +
     filterSelect('role', 'Ответственный за следующий шаг', 'Все ответственные', [...steps.map(step => step.role), 'Готово'], cardFilters.role) +
     (estimate.sections?.length ? '<select id="section-filter" aria-label="Раздел или подраздел сметы">' +
       sectionOptions('Все разделы', sectionFilter) + '</select>' : '') +
-    '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div><div id="results"></div></section>';
+    '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div><div id="results"></div>' +
+    '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
+    '<div id="inline-position-content"></div></section></section>';
   const draw = () => {
     const tabs = document.querySelector('#categories');
     tabs.innerHTML = [['all', 'Все позиции'], ...categories.map(category => [category, category])].map(([value, label]) => {
@@ -523,7 +529,7 @@ function renderCard() {
         '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
         '</span></td><td>' + (step ? step.role : '—') + '</td></tr>';
     });
-    const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Нажмите «Добавить позицию».';
+    const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Добавьте первую расценку в форме ниже.';
     document.querySelector('#results').innerHTML = table(['№', 'Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
       '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimate.rows.length + '</div>';
   };
@@ -559,8 +565,29 @@ function renderCard() {
     const button = event.target.closest('[data-row]');
     if (button) openDrawer(estimate.rows.find(row => row.id === button.dataset.row));
   };
-  document.querySelector('#add').onclick = () => openDrawer(null);
   draw();
+  const entry = document.querySelector('#inline-position-content');
+  if (!resetEntry && previousEntry?.dataset.estimateId === estimate.id) {
+    entry.replaceWith(previousEntry);
+    const structure = previousEntry.querySelector('#inline-structure');
+    const selected = structure.querySelector('select')?.value;
+    structure.innerHTML = estimate.sections?.length ? structureField(selected ?? sectionFilter) : '';
+  } else {
+    renderInlineEntry();
+  }
+}
+
+function renderInlineEntry() {
+  const entry = document.querySelector('#inline-position-content');
+  if (!entry || !activeEstimate) return;
+  entry.dataset.estimateId = activeEstimate.id;
+  entry.innerHTML = stepForm(0);
+  bindPositionForm(entry, 0);
+}
+
+function focusInlineEntry() {
+  const entry = document.querySelector('#inline-position-content');
+  (entry?.querySelector('#catalog-query') || entry?.querySelector('[name="name"]'))?.focus();
 }
 
 const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
@@ -641,18 +668,22 @@ function stepForm(index, row, prices, canSkipSupply) {
     () => numericField('Цена заказчику за единицу, ₽', 'customerPrice') +
       (row?.supplyPrice != null ? '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>' : '')
   ];
-  return '<form class="action" id="step-form"><h3>Действие · ' + steps[index].role + '</h3><p class="note">' + descriptions[index] +
+  const title = index === 0 ? '<h3 id="inline-position-title">Новая расценка</h3>' :
+    '<h3>Действие · ' + steps[index].role + '</h3>';
+  return '<form class="action" id="' + (index === 0 ? 'add-line-form' : 'step-form') + '">' + title +
+    '<p class="note">' + descriptions[index] +
     '</p>' + (index === 0 ? positionPicker() : pricePicker(prices)) +
     '<div class="fields">' + fields[index]() +
-    (index === 0 && activeEstimate.sections?.length ? structureField(sectionFilter) : '') + '</div>' +
+    (index === 0 ? '<div id="inline-structure">' +
+      (activeEstimate.sections?.length ? structureField(sectionFilter) : '') + '</div>' : '') + '</div>' +
     (index === 0 ? '<div id="base-rate"></div><p class="note" id="base-rate-error" role="alert"></p>' : '') +
-    '<button class="btn primary" type="submit">' + steps[index].action + '</button>' +
+    '<button class="btn primary" type="submit">' + (index === 0 ? 'Добавить расценку' : steps[index].action) + '</button>' +
     (canSkipSupply ? '<button class="btn" type="button" id="skip-supply">Перейти к цене заказчика без цены ОМТС</button>' : '') +
     '</form>';
 }
 
 function renderDrawer(row, status = '', editingCustomerPrice = false) {
-  const index = editingCustomerPrice ? 3 : row ? nextStep(row) : 0;
+  const index = editingCustomerPrice ? 3 : nextStep(row);
   const basePrice = baseCatalogPrice(row);
   const prices = index === 2 || (index === 3 && !basePrice) ? availablePrices(row, index) : [];
   const canSkipSupply = index === 2 && availablePrices(row, 3).length > 0;
@@ -703,7 +734,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       const saved = save();
       dialog.close();
       renderCard();
-      document.querySelector('#add').focus();
+      focusInlineEntry();
       notify(saved ? 'Строка удалена.' : 'Строка удалена до обновления страницы.');
     };
   }
@@ -724,20 +755,24 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       dialog.querySelector('[name="customerPrice"]').focus();
     };
   }
-  const form = dialog.querySelector('#step-form');
+  bindPositionForm(dialog, index, row, prices, basePrice, canSkipSupply, editingCustomerPrice);
+}
+
+function bindPositionForm(surface, index, row, prices = [], basePrice, canSkipSupply = false, editingCustomerPrice = false) {
+  const form = surface.querySelector(index === 0 ? '#add-line-form' : '#step-form');
   if (!form) return;
-  const copyPrice = dialog.querySelector('#copy-price');
+  const copyPrice = surface.querySelector('#copy-price');
   if (copyPrice) {
     copyPrice.onclick = () => {
       const field = form.elements.namedItem('customerPrice');
       field.value = row.supplyPrice;
-      const picker = dialog.querySelector('#catalog-price');
+      const picker = surface.querySelector('#catalog-price');
       if (picker) picker.value = '';
       field.focus();
     };
   }
   if (index === 1 && hourlyUnit(row.unit)) form.elements.namedItem('hours').value = row.volume;
-  const priceSelect = dialog.querySelector('#catalog-price');
+  const priceSelect = surface.querySelector('#catalog-price');
   const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
   if (index === 3) priceField.value = row.customerPrice ?? basePrice?.value ?? row.supplyPrice ?? '';
   const chosenPrice = () => priceSelect && prices[priceSelect.value];
@@ -745,7 +780,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     priceSelect.onchange = () => {
       const price = chosenPrice();
       priceField.value = price?.value ?? '';
-      dialog.querySelector('#catalog-source').textContent = price ? [
+      surface.querySelector('#catalog-source').textContent = price ? [
         price.counterparty, price.source,
         price.kind === 'history' ? 'Архивная цена. Проверьте применимость к текущей смете.' : ''
       ].filter(Boolean).join(' · ') : '';
@@ -757,19 +792,19 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     }
   }
   if (canSkipSupply) {
-    dialog.querySelector('#skip-supply').onclick = () => {
+    surface.querySelector('#skip-supply').onclick = () => {
       row.supplySkipped = true;
       const saved = save();
       cardFilters.role = 'all';
       renderCard();
       renderDrawer(row, saved ? 'Цена ОМТС не указана.' : 'Цена ОМТС не указана. Изменение доступно до обновления страницы.');
-      dialog.querySelector('#drawer-title').focus();
+      surface.querySelector('#drawer-title').focus();
     };
   }
-  const positionQuery = dialog.querySelector('#catalog-query');
+  const positionQuery = surface.querySelector('#catalog-query');
   let chosenPosition = null;
-  const baseRate = dialog.querySelector('#base-rate');
-  const baseRateError = dialog.querySelector('#base-rate-error');
+  const baseRate = surface.querySelector('#base-rate');
+  const baseRateError = surface.querySelector('#base-rate-error');
   let basePrices = [];
   function renderBaseRate() {
     const position = chosenPosition;
@@ -795,17 +830,15 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
         form.elements.namedItem('unit').value = position?.category === categorySelect.value ? position.unit : defaultUnits[selection];
       }
       renderBaseRate();
-      form.querySelector('button[type="submit"]').textContent =
-        categorySelect.value === 'Механизмы' || selection < 0 ? steps[0].action : steps[2].action;
     };
     categorySelect.onchange = setUnit;
     setUnit();
     form.elements.namedItem('name').oninput = event => event.target.setCustomValidity('');
   }
   if (positionQuery) {
-    const suggestions = dialog.querySelector('#catalog-suggestions');
-    const preview = dialog.querySelector('#catalog-position-price');
-    const count = dialog.querySelector('#catalog-matches');
+    const suggestions = surface.querySelector('#catalog-suggestions');
+    const preview = surface.querySelector('#catalog-position-price');
+    const count = surface.querySelector('#catalog-matches');
     let matches = [];
     let activeIndex = -1;
 
@@ -906,7 +939,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       const position = chosenPosition;
       const matchesCatalog = position && position.name === row.name && position.unit === row.unit && position.category === row.category;
       if (row.category !== 'Механизмы') {
-        const selected = dialog.querySelector('#base-price');
+        const selected = surface.querySelector('#base-price');
         const price = matchesCatalog && selected && basePrices[selected.value];
         if (!price) {
           baseRateError.textContent = 'Выберите позицию и готовую расценку из справочника.';
@@ -918,6 +951,9 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       if (matchesCatalog) row.catalogCode = position.code;
       row.structure = fields.get('structure') || '';
       activeEstimate.rows.push(row);
+      if (sectionFilter && row.structure !== sectionFilter && !row.structure.startsWith(sectionFilter + '/')) {
+        sectionFilter = row.structure;
+      }
       cardFilters = { query: '', category: row.category, role: 'all' };
     } else {
       const key = ['volume', 'hours', 'supplyPrice', 'customerPrice'][index];
@@ -942,15 +978,20 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     }
     drawerReturn = row.id;
     const saved = save();
-    renderCard();
+    renderCard(index === 0);
     const status = [
       '', 'Позиция передана главному инженеру.', 'Позиция передана в ОМТС.',
       'Позиция передана коммерческому директору.', 'Цена для заказчика подтверждена.'
     ][nextStep(row)];
     const message = saved ? status : status + ' Изменения сохранены до закрытия страницы.';
+    if (index === 0) {
+      notify('Расценка добавлена. ' + message);
+      focusInlineEntry();
+      return;
+    }
     renderDrawer(row, message);
-    const nextField = dialog.querySelector('#step-form input');
-    const focusTarget = nextField || dialog.querySelector('#drawer-title');
+    const nextField = surface.querySelector('#step-form input');
+    const focusTarget = nextField || surface.querySelector('#drawer-title');
     focusTarget.setAttribute('aria-describedby', 'drawer-status');
     focusTarget.focus();
     notify(message);
@@ -967,7 +1008,8 @@ function openDrawer(row) {
 dialog.addEventListener('close', () => {
   if (!activeEstimate) return;
   const rowButton = [...main.querySelectorAll('[data-row]')].find(button => button.dataset.row === drawerReturn);
-  (rowButton || document.querySelector('#add'))?.focus();
+  if (rowButton) rowButton.focus();
+  else focusInlineEntry();
 });
 
 document.querySelector('#cancel-estimate').onclick = () => newEstimateDialog.close();
@@ -1065,6 +1107,7 @@ catalogFile.onchange = async () => {
   try {
     catalog = await priceCatalog.read(file);
     const saved = priceCatalog.save(catalog);
+    renderInlineEntry();
     catalogFeedback.textContent = 'Загружено позиций: ' + catalog.positions.length +
       (saved ? '.' : '. Справочник доступен до обновления страницы.');
   } catch (error) {
