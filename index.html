@@ -45,8 +45,10 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .workflow-panel{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px}
 .workflow-panel h2{font-size:17px;margin:0 0 4px}
 .workflow-panel .note{margin:0}
-.section-band td{background:#e9efff;font-weight:700}
-.subsection-band td{background:#f2f6ff;padding-left:28px;font-weight:650}
+.section-band td{background:#1945a8;color:#fff;font-weight:750;border-left:5px solid #123582}
+.subsection-band td{background:#dce8ff;color:#13387f;padding-left:28px;font-weight:700;border-left:5px solid #7b9dde}
+.section-band .btn{color:#123582;border-color:#d4e2ff}
+.subsection-band .btn{color:#13387f}
 .group-controls,.row-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
 .group-controls .btn,.row-controls .btn{min-height:32px;padding:5px 9px}
 .entry-target{margin:0 0 10px;color:var(--muted)}
@@ -540,6 +542,37 @@ function showSectionForm(parentId = '') {
   sectionForm.elements.namedItem('name').focus();
 }
 
+function deleteEstimateSection(key) {
+  const estimate = activeEstimate;
+  if (!estimate || estimateStage(estimate) !== 0) return;
+  const [sectionId, childId] = key.split('/');
+  const section = estimate.sections?.find(item => item.id === sectionId);
+  const target = childId ? section?.children.find(item => item.id === childId) : section;
+  if (!target) return;
+  const belongs = value => value === key || (!childId && value?.startsWith(key + '/'));
+  const affected = estimate.rows.filter(row => belongs(row.structure));
+  const destination = childId ? sectionId : '';
+  const kind = childId ? 'подраздел' : 'раздел';
+  const consequence = affected.length ? '\nРасценки будут перенесены ' +
+    (childId ? 'в раздел «' + section.name + '».' : 'в группу «Без раздела».') : '';
+  const childrenNote = !childId && section.children.length ? ' Вместе с подразделами.' : '';
+  if (!window.confirm('Удалить ' + kind + ' «' + target.name + '»?' + childrenNote + consequence)) return;
+  for (const row of affected) row.structure = destination;
+  if (childId) section.children = section.children.filter(item => item.id !== childId);
+  else estimate.sections = estimate.sections.filter(item => item.id !== sectionId);
+  if (belongs(sectionFilter)) sectionFilter = destination;
+  if (belongs(entryStructure)) entryStructure = destination;
+  const entry = document.querySelector('#inline-position-content');
+  const select = entry?.querySelector('[name="structure"]');
+  if (select && belongs(select.value)) select.value = destination;
+  const saved = save();
+  renderCard();
+  setEntryStructure(entryStructure, false);
+  document.querySelector('#add-estimate-section')?.focus();
+  notify((childId ? 'Подраздел удалён.' : 'Раздел удалён.') +
+    (saved ? '' : ' Изменение доступно до обновления страницы.'));
+}
+
 function deleteEstimateLine(row) {
   if (!row || estimateStage(activeEstimate) !== 0 ||
     !window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
@@ -638,11 +671,12 @@ function renderCard(resetEntry = false) {
         child.parent === key && (!sectionFilter || childKey === sectionFilter || key === sectionFilter) &&
         (showEmptyGroups || child.rows.some(row => visibleIds.has(row.id))));
       if (!matchingRows.length && !(showEmptyGroups && inSection) && !showParent) continue;
-      if (key || estimate.sections?.length) {
+      if (key || estimate.sections) {
         const controls = stage === 0 && key ? '<div class="group-controls">' +
           '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить сюда</button>' +
           (group.parent ? '' : '<button class="btn" type="button" data-child-section="' + esc(key) + '">+ Подраздел</button>') +
-          '</div>' : '';
+          '<button class="btn" type="button" data-delete-section="' + esc(key) + '">' +
+          (group.parent ? 'Удалить подраздел' : 'Удалить раздел') + '</button></div>' : '';
         rows.push('<tr class="' + (group.parent ? 'subsection-band' : 'section-band') +
           '"><td colspan="9">' + esc(group.name) + controls + '</td></tr>');
       }
@@ -680,8 +714,9 @@ function renderCard(resetEntry = false) {
   document.querySelector('#results').onclick = event => {
     const button = event.target.closest('button');
     if (!button) return;
-    const { childSection, entrySection, editLine, deleteLine, row } = button.dataset;
+    const { childSection, entrySection, deleteSection, editLine, deleteLine, row } = button.dataset;
     if (childSection) showSectionForm(childSection);
+    else if (deleteSection) deleteEstimateSection(deleteSection);
     else if (entrySection) {
       if (editingLine) {
         editingLine = null;
@@ -1258,7 +1293,8 @@ sectionForm.onsubmit = event => {
     field.reportValidity();
     return;
   }
-  const item = { id: String(siblings.length + 1), name };
+  const nextSectionId = siblings.reduce((max, entry) => Math.max(max, Number(entry.id)), 0) + 1;
+  const item = { id: String(nextSectionId), name };
   siblings.push(parent ? item : { ...item, children: [] });
   const saved = save();
   sectionDialog.close();
