@@ -109,8 +109,8 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
     <div class="drawer-body">
       <form class="action" id="estimate-section-form">
         <div class="fields">
-          <label>Входит в раздел<select name="parent"></select></label>
-          <label>Наименование<input name="name" maxlength="160" required></label>
+          <label>Родительский раздел<select name="parent"></select></label>
+          <label>Название раздела или подраздела<input name="name" maxlength="160" required autocomplete="off" placeholder="Введите название вручную"></label>
         </div>
         <button class="btn primary" type="submit">Добавить</button>
       </form>
@@ -813,7 +813,7 @@ function stepForm(index, row, prices) {
     (name.endsWith('Price') ? 'any' : '0.01') + '" required></label>';
   const fields = [
     () => '<label>Название позиции<input name="name" required maxlength="500" placeholder="Например, мини-экскаватор"></label>' +
-      '<label>Раздел<select name="category" required><option value="">Выберите раздел</option>' +
+      '<label>Тип позиции<select name="category" required><option value="">Выберите тип</option>' +
       categories.map(category => '<option' + (cardFilters.category === category ? ' selected' : '') + '>' + category + '</option>').join('') +
       '</select></label><div class="pair"><label>Единица измерения<select name="unit" required>' +
       [...new Set(['м³', 'м²', 'т', 'шт.', 'смена', 'ч', 'маш.-ч', 'рейс', 'компл.', 'м.п.', 'кг',
@@ -847,7 +847,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
   const canAct = index === stage || index === 4;
   const number = index === 0 ? 'Новая позиция' : 'Позиция сметы № ' + activeEstimate.id;
   const values = row ? [
-    ['Раздел', row.category], ['Объём', quantity(row.volume) + ' ' + row.unit],
+    ['Тип позиции', row.category], ['Объём', quantity(row.volume) + ' ' + row.unit],
     ...(row.category === 'Механизмы' ? [['Часы механизма', row.hours == null ? '—' : quantity(row.hours) + ' ч']] : []),
     ['Цена ОМТС / ед.', row.supplySkipped ? 'Цена ОМТС не указана' : money(row.supplyPrice)],
     ...(basePrice ? [
