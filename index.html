@@ -20,6 +20,12 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .drawer-back{justify-self:start}
 .handoff{margin:0 0 12px;padding:9px 11px;border-radius:7px;background:var(--soft);color:var(--green-dark);font-size:14px;line-height:1.4}
 .action .copy-price{width:auto;justify-self:start;margin-top:0}
+.top-actions{display:flex;align-items:center;gap:10px}
+.catalog-fields{margin:0 0 18px;padding:0;border:0;min-width:0}
+.catalog-fields legend{font-weight:700;margin-bottom:8px}
+.catalog-fields .note{margin:8px 0 0;overflow-wrap:anywhere}
+.catalog-fields select{max-width:100%}
+.delete-row{color:#8e312a;margin-top:12px}
 </style>
 </head>
 <body>
@@ -30,7 +36,7 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
     <div class="side-note">Учебные данные<br>Внутренняя система смет</div>
   </aside>
   <div>
-    <header class="top"><nav class="crumb" id="crumb" aria-label="Вы здесь"></nav><span class="demo">Демо-режим</span></header>
+    <header class="top"><nav class="crumb" id="crumb" aria-label="Вы здесь"></nav><div class="top-actions"><button class="btn" id="load-catalog" type="button">Загрузить справочник</button><input id="catalog-file" type="file" accept=".xlsx" hidden></div></header>
     <main id="main"></main>
   </div>
 </div>
@@ -54,10 +60,12 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 </dialog>
 <dialog id="position" aria-labelledby="drawer-title"></dialog>
 <p id="toast" class="toast" role="status"></p>
+<script src="catalog.js"></script>
 <script>
 'use strict';
 
-const categories = ['Работы', 'Материалы', 'Механизмы', 'Доставка'];
+const categories = ['Работы', 'Материалы', 'Механизмы', 'Доставка', 'Прочее'];
+let catalog = priceCatalog.load();
 const steps = [
   { role: 'ПТО', missing: 'Позиция и объём', action: 'Передать главному инженеру' },
   { role: 'Главный инженер', missing: 'Часы механизма', action: 'Передать в ОМТС' },
@@ -129,7 +137,7 @@ function nextEstimateNumber(date) {
 function nextStep(row) {
   if (!row.name || row.volume == null) return 0;
   if (row.category === 'Механизмы' && row.hours == null) return 1;
-  if (row.supplyPrice == null) return 2;
+  if (row.supplyPrice == null && !row.supplySkipped) return 2;
   if (row.customerPrice == null) return 3;
   return 4;
 }
@@ -269,39 +277,80 @@ function renderCard() {
   draw();
 }
 
-function stepForm(index) {
+const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
+const hourlyUnit = unit => ['ч', 'маш.-ч'].includes(unit);
+
+function availablePrices(row, index) {
+  if (!row?.catalogCode || !catalog) return [];
+  const position = catalog.positions.find(item => item.code === row.catalogCode && item.unit === row.unit);
+  const date = new Date().toLocaleDateString('sv-SE');
+  return (position?.prices ?? []).filter(price => {
+    if (index === 2 ? price.kind !== 'supply' : price.kind === 'supply') return false;
+    return price.kind === 'history' ||
+      price.date <= date && price.confirmed <= date && (!price.expires || price.expires >= date);
+  }).sort((a, b) => Number(a.kind === 'history') - Number(b.kind === 'history') || b.date.localeCompare(a.date));
+}
+
+function pricePicker(prices) {
+  if (!prices.length) return '';
+  return '<fieldset class="catalog-fields"><legend>Цена из справочника</legend><div class="fields">' +
+    '<label>Расценка<select id="catalog-price"><option value="">Выберите цену</option>' +
+    prices.map((price, index) => '<option value="' + index + '">' +
+      esc([priceKinds[price.kind], money(price.value), price.date, price.vat, price.code].filter(Boolean).join(' · ')) +
+      '</option>').join('') + '</select></label></div><p class="note" id="catalog-source"></p></fieldset>';
+}
+
+function positionPicker() {
+  if (!catalog) return '<p class="note">Чтобы выбрать позицию из Excel, нажмите «Загрузить справочник» вверху страницы.</p>';
+  return '<fieldset class="catalog-fields"><legend>Выбор из справочника</legend><div class="fields">' +
+    '<label>Поиск по названию или коду<input id="catalog-query" type="search"></label>' +
+    '<label>Позиция<select id="catalog-position"></select></label></div>' +
+    '<p class="note" id="catalog-matches" role="status"></p></fieldset>';
+}
+
+function stepForm(index, row, prices, canSkipSupply) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
     'Укажите название, раздел, единицу измерения и объём. Для механизмов следующим шагом будет ввод часов. Остальные позиции сразу попадут в ОМТС.',
     'Укажите общее количество часов работы механизма по этой позиции.',
-    'Укажите условную цену ОМТС за единицу позиции.',
-    'Укажите и подтвердите условную цену для заказчика за единицу позиции.'
+    'Выберите закупочную цену из справочника или введите цену ОМТС.',
+    'Выберите расценку или введите цену для заказчика, затем подтвердите её.'
   ];
   const numericField = (label, name) =>
-    '<label>' + label + '<input name="' + name + '" type="number" min="0.01" max="100000000" step="0.01" required></label>';
+    '<label>' + label + '<input name="' + name + '" type="number" min="0.01" max="100000000" step="' +
+    (name.endsWith('Price') ? 'any' : '0.01') + '" required></label>';
   const fields = [
-    () => '<label>Название позиции<input name="name" required maxlength="120" placeholder="Например, мини-экскаватор"></label>' +
+    () => '<label>Название позиции<input name="name" required maxlength="500" placeholder="Например, мини-экскаватор"></label>' +
       '<label>Раздел<select name="category" required><option value="">Выберите раздел</option>' +
       categories.map(category => '<option' + (cardFilters.category === category ? ' selected' : '') + '>' + category + '</option>').join('') +
       '</select></label><div class="pair"><label>Единица измерения<select name="unit" required>' +
-      ['м³', 'м²', 'т', 'шт.', 'смена', 'ч', 'рейс', 'компл.'].map(unit => '<option>' + unit + '</option>').join('') +
+      [...new Set(['м³', 'м²', 'т', 'шт.', 'смена', 'ч', 'маш.-ч', 'рейс', 'компл.', 'м.п.', 'кг',
+        ...(catalog?.positions.map(position => position.unit) ?? [])])].map(unit => '<option>' + esc(unit) + '</option>').join('') +
       '</select></label>' + numericField('Объём', 'volume') + '</div>',
     () => numericField('Часы работы, ч', 'hours'),
     () => numericField('Цена ОМТС за единицу, ₽', 'supplyPrice'),
     () => numericField('Цена заказчику за единицу, ₽', 'customerPrice') +
-      '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>'
+      (row?.supplyPrice != null ? '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>' : '')
   ];
   return '<form class="action" id="step-form"><h3>Действие · ' + steps[index].role + '</h3><p class="note">' + descriptions[index] +
-    '</p><div class="fields">' + fields[index]() + '</div><button class="btn primary" type="submit">' + steps[index].action + '</button></form>';
+    '</p>' + (index === 0 ? positionPicker() : pricePicker(prices)) +
+    '<div class="fields">' + fields[index]() + '</div><button class="btn primary" type="submit">' + steps[index].action + '</button>' +
+    (canSkipSupply ? '<button class="btn" type="button" id="skip-supply">Перейти к цене заказчика без цены ОМТС</button>' : '') +
+    '</form>';
 }
 
 function renderDrawer(row, status = '') {
   const index = row ? nextStep(row) : 0;
+  const prices = index === 2 || index === 3 ? availablePrices(row, index) : [];
+  const canSkipSupply = index === 2 && availablePrices(row, 3).length > 0;
   const number = index === 0 ? 'Новая позиция' : 'Позиция сметы № ' + activeEstimate.id;
   const values = row ? [
     ['Раздел', row.category], ['Объём', quantity(row.volume) + ' ' + row.unit],
     ...(row.category === 'Механизмы' ? [['Часы механизма', row.hours == null ? '—' : quantity(row.hours) + ' ч']] : []),
-    ['Цена ОМТС / ед.', money(row.supplyPrice)], ['Цена заказчику / ед.', money(row.customerPrice)]
+    ['Цена ОМТС / ед.', row.supplySkipped ? 'Цена ОМТС не указана' : money(row.supplyPrice)],
+    ['Цена заказчику / ед.', money(row.customerPrice)],
+    ...(row.supplyRate ? [['Источник цены ОМТС', row.supplyRate]] : []),
+    ...(row.customerRate ? [['Источник цены заказчику', row.customerRate]] : [])
   ] : [];
   const route = steps.map((step, position) => {
     const skipped = index > 0 && position === 1 && row.category !== 'Механизмы';
@@ -318,22 +367,61 @@ function renderDrawer(row, status = '') {
     (values.length ? '<dl class="detail">' + values.map(([label, value]) =>
       '<div><dt>' + label + '</dt><dd>' + esc(value) + '</dd></div>').join('') + '</dl>' : '') +
     (status ? '<p class="handoff" id="drawer-status" role="status">' + esc(status) + '</p>' : '') +
-    stepForm(index) + '</div></div>';
+    stepForm(index, row, prices, canSkipSupply) +
+    (row ? '<button class="btn delete-row" id="delete-position" type="button">Удалить строку</button>' : '') +
+    '</div></div>';
   for (const button of dialog.querySelectorAll('[data-close-drawer]')) {
     button.onclick = () => dialog.close();
   }
+  if (row) {
+    const estimate = activeEstimate;
+    dialog.querySelector('#delete-position').onclick = () => {
+      if (!window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
+      estimate.rows = estimate.rows.filter(item => item.id !== row.id);
+      const saved = save();
+      dialog.close();
+      renderCard();
+      document.querySelector('#add').focus();
+      notify(saved ? 'Строка удалена.' : 'Строка удалена до обновления страницы.');
+    };
+  }
   const form = dialog.querySelector('#step-form');
   if (!form) return;
-  if (index === 3) {
-    dialog.querySelector('#copy-price').onclick = () => {
+  const copyPrice = dialog.querySelector('#copy-price');
+  if (copyPrice) {
+    copyPrice.onclick = () => {
       const field = form.elements.namedItem('customerPrice');
       field.value = row.supplyPrice;
       field.focus();
     };
   }
+  if (index === 1 && hourlyUnit(row.unit)) form.elements.namedItem('hours').value = row.volume;
+  const priceSelect = dialog.querySelector('#catalog-price');
+  const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
+  const chosenPrice = () => priceSelect && prices[priceSelect.value];
+  if (priceSelect) {
+    priceSelect.onchange = () => {
+      const price = chosenPrice();
+      priceField.value = price?.value ?? '';
+      dialog.querySelector('#catalog-source').textContent = price ? [
+        price.counterparty, price.source,
+        price.kind === 'history' ? 'Архивная цена. Проверьте применимость к текущей смете.' : ''
+      ].filter(Boolean).join(' · ') : '';
+    };
+  }
+  if (canSkipSupply) {
+    dialog.querySelector('#skip-supply').onclick = () => {
+      row.supplySkipped = true;
+      const saved = save();
+      cardFilters.role = 'all';
+      renderCard();
+      renderDrawer(row, saved ? 'Цена ОМТС не указана.' : 'Цена ОМТС не указана. Изменение доступно до обновления страницы.');
+      dialog.querySelector('#drawer-title').focus();
+    };
+  }
   const categorySelect = form.elements.namedItem('category');
   if (categorySelect) {
-    const defaultUnits = ['м²', 'м³', 'смена', 'рейс'];
+    const defaultUnits = ['м²', 'м³', 'смена', 'рейс', 'компл.'];
     const setUnit = () => {
       const selection = categories.indexOf(categorySelect.value);
       if (selection >= 0) form.elements.namedItem('unit').value = defaultUnits[selection];
@@ -343,6 +431,34 @@ function renderDrawer(row, status = '') {
     categorySelect.onchange = setUnit;
     setUnit();
     form.elements.namedItem('name').oninput = event => event.target.setCustomValidity('');
+  }
+  const positionSelect = dialog.querySelector('#catalog-position');
+  const positionQuery = dialog.querySelector('#catalog-query');
+  const chosenPosition = () => positionSelect && catalog.positions[positionSelect.value || -1];
+  if (positionSelect) {
+    function drawPositions() {
+      const tokens = positionQuery.value.trim().toLocaleLowerCase('ru').split(/\s+/);
+      const matches = catalog.positions.map((position, id) => ({ position, id })).filter(({ position }) => {
+        const text = (position.name + ' ' + position.code).toLocaleLowerCase('ru');
+        return categories.includes(position.category) && tokens.every(token => text.includes(token));
+      });
+      positionSelect.innerHTML = '<option value="">Выберите позицию</option>' +
+        matches.slice(0, 50).map(({ position, id }) => '<option value="' + id + '">' +
+          esc(position.name + ' · ' + position.unit + ' · ' + position.code) + '</option>').join('');
+      dialog.querySelector('#catalog-matches').textContent = 'Показано ' + Math.min(matches.length, 50) + ' из ' + matches.length;
+    }
+    positionQuery.oninput = drawPositions;
+    positionSelect.onchange = () => {
+      const position = chosenPosition();
+      if (!position) return;
+      const name = form.elements.namedItem('name');
+      name.value = position.name;
+      name.setCustomValidity('');
+      categorySelect.value = position.category;
+      categorySelect.onchange();
+      form.elements.namedItem('unit').value = position.unit;
+    };
+    drawPositions();
   }
   form.onsubmit = event => {
     event.preventDefault();
@@ -355,13 +471,24 @@ function renderDrawer(row, status = '') {
         input.reportValidity();
         return;
       }
-      row = makeRow(String(activeEstimate.rows.length + 1), name, fields.get('category'), fields.get('unit'),
+      const nextId = activeEstimate.rows.reduce((max, item) => Math.max(max, Number(item.id)), 0) + 1;
+      row = makeRow(String(nextId), name, fields.get('category'), fields.get('unit'),
         Number(fields.get('volume')), null, null, null);
+      const position = chosenPosition();
+      if (position && position.name === row.name && position.unit === row.unit && position.category === row.category) {
+        row.catalogCode = position.code;
+      }
       activeEstimate.rows.push(row);
       cardFilters = { query: '', category: row.category, role: 'all' };
     } else {
       const key = ['volume', 'hours', 'supplyPrice', 'customerPrice'][index];
       row[key] = Number(fields.get(key));
+      if (index === 1 && hourlyUnit(row.unit)) row.volume = row.hours;
+      const price = chosenPrice();
+      if (price && price.value === row[key]) {
+        row[index === 2 ? 'supplyRate' : 'customerRate'] =
+          [priceKinds[price.kind], price.code, price.date, price.vat, price.counterparty, price.source].filter(Boolean).join(' · ');
+      }
       if (cardFilters.role !== 'all') cardFilters.role = 'all';
     }
     drawerReturn = row.id;
@@ -441,6 +568,31 @@ function renderScreen(focusHeading = false) {
     window.scrollTo(0, 0);
   }
 }
+const loadCatalog = document.querySelector('#load-catalog');
+const catalogFile = document.querySelector('#catalog-file');
+function showCatalogStatus() {
+  loadCatalog.textContent = catalog ? 'Обновить справочник' : 'Загрузить справочник';
+  loadCatalog.title = catalog ? catalog.name + ' · ' + catalog.positions.length + ' позиций' : '';
+}
+loadCatalog.onclick = () => catalogFile.click();
+catalogFile.onchange = async () => {
+  const file = catalogFile.files[0];
+  catalogFile.value = '';
+  if (!file) return;
+  loadCatalog.disabled = true;
+  try {
+    catalog = await priceCatalog.read(file);
+    const saved = priceCatalog.save(catalog);
+    notify('Справочник загружен. Позиций: ' + catalog.positions.length +
+      (saved ? '.' : '. Справочник доступен до обновления страницы.'));
+  } catch (error) {
+    notify(error instanceof RangeError ? 'Не удалось открыть книгу Excel.' : error.message);
+  } finally {
+    loadCatalog.disabled = false;
+    showCatalogStatus();
+  }
+};
+showCatalogStatus();
 window.addEventListener('hashchange', () => renderScreen(true));
 renderScreen();
 </script>
