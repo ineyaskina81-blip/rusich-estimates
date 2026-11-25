@@ -897,8 +897,15 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       const query = positionQuery.value.trim().toLocaleLowerCase('ru');
       const tokens = query.split(/\s+/);
       const found = query ? catalog.positions.filter(position => {
-        const text = (position.name + ' ' + position.code).toLocaleLowerCase('ru');
-        return categories.includes(position.category) && tokens.every(token => text.includes(token));
+        const text = (position.name + ' ' + position.code).toLocaleLowerCase('ru').replaceAll('ё', 'е');
+        const words = text.match(/[а-я]+/g) ?? [];
+        return categories.includes(position.category) && tokens.every(raw => {
+          const token = raw.replaceAll('ё', 'е');
+          if (text.includes(token)) return true;
+          if (!/^[а-я]{7,}$/.test(token)) return false;
+          const stem = token.replace(/(?:иями|иях|иям|ием|ию|ия|ий|ие)$/, '');
+          return stem !== token && words.some(word => word.startsWith(stem));
+        });
       }) : [];
       showSuggestions(false);
       matches = found.slice(0, 50);
