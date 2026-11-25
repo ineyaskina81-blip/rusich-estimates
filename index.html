@@ -616,8 +616,8 @@ function renderCard(resetEntry = false) {
       (!estimate.rows.length || waiting ? ' disabled' : '') + '>' + stageButton + '</button>') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
-    (stage === 0 ? '<div class="group-controls"><button class="btn" id="add-estimate-section" type="button">+ Раздел</button>' +
-      (estimate.sections?.length ? '<button class="btn" id="add-estimate-subsection" type="button">+ Подраздел</button>' : '') + '</div>' : '') + '</div>' +
+    '<div class="group-controls"><button class="btn" id="add-estimate-section" type="button">+ Раздел</button>' +
+    (estimate.sections?.length ? '<button class="btn" id="add-estimate-subsection" type="button">+ Подраздел</button>' : '') + '</div></div>' +
     '<div class="tabs" role="group" aria-label="Раздел сметы" id="categories"></div><div class="toolbar">' +
     searchField(cardFilters.query, 'Поиск по названию позиции') +
     filterSelect('role', 'Ответственный за следующий шаг', 'Все ответственные', [...steps.map(step => step.role), 'Готово'], cardFilters.role) +
@@ -672,11 +672,11 @@ function renderCard(resetEntry = false) {
         (showEmptyGroups || child.rows.some(row => visibleIds.has(row.id))));
       if (!matchingRows.length && !(showEmptyGroups && inSection) && !showParent) continue;
       if (key || estimate.sections) {
-        const controls = stage === 0 && key ? '<div class="group-controls">' +
-          '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить сюда</button>' +
+        const controls = key && (stage === 0 || !group.parent) ? '<div class="group-controls">' +
+          (stage === 0 ? '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить сюда</button>' : '') +
           (group.parent ? '' : '<button class="btn" type="button" data-child-section="' + esc(key) + '">+ Подраздел</button>') +
-          '<button class="btn" type="button" data-delete-section="' + esc(key) + '">' +
-          (group.parent ? 'Удалить подраздел' : 'Удалить раздел') + '</button></div>' : '';
+          (stage === 0 ? '<button class="btn" type="button" data-delete-section="' + esc(key) + '">' +
+            (group.parent ? 'Удалить подраздел' : 'Удалить раздел') + '</button>' : '') + '</div>' : '';
         rows.push('<tr class="' + (group.parent ? 'subsection-band' : 'section-band') +
           '"><td colspan="9">' + esc(group.name) + controls + '</td></tr>');
       }
@@ -914,7 +914,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     (canAct && index !== 0 ? stepForm(index, row, prices) :
       '<p class="note">Действие доступно на этапе «' + steps[index].role + '».</p>') +
     (index === 4 && stage === 3 ? '<button class="btn" id="adjust-customer-price" type="button">Скорректировать цену заказчику</button>' : '') +
-    (stage === 0 && row && activeEstimate.sections?.length ?
+    (row && activeEstimate.sections?.length ?
       '<form class="action position-structure" id="change-structure"><div class="fields">' +
       structureField(row.structure) + '</div><button class="btn" type="submit">Сохранить раздел</button></form>' : '') +
     (stage === 0 && row ? '<button class="btn" id="edit-position" type="button">Изменить строку</button>' +
@@ -1280,7 +1280,7 @@ sectionForm.elements.namedItem('name').oninput = event => event.target.setCustom
 sectionForm.elements.namedItem('parent').onchange = () => sectionForm.elements.namedItem('name').setCustomValidity('');
 sectionForm.onsubmit = event => {
   event.preventDefault();
-  if (!activeEstimate || estimateStage(activeEstimate) !== 0) return;
+  if (!activeEstimate) return;
   const fields = new FormData(sectionForm);
   const name = fields.get('name').trim();
   const sections = activeEstimate.sections ??= [];
@@ -1299,9 +1299,12 @@ sectionForm.onsubmit = event => {
   const saved = save();
   sectionDialog.close();
   sectionFilter = '';
-  cardFilters.category = 'all';
+  cardFilters = { query: '', category: 'all', role: 'all' };
   renderCard();
-  setEntryStructure(parent ? parent.id + '/' + item.id : item.id);
+  const key = parent ? parent.id + '/' + item.id : item.id;
+  const enteringPositions = estimateStage(activeEstimate) === 0;
+  setEntryStructure(key, enteringPositions);
+  if (!enteringPositions) document.querySelector('#add-estimate-section')?.focus();
   notify((parent ? 'Подраздел добавлен.' : 'Раздел добавлен.') +
     (saved ? '' : ' Изменение доступно до обновления страницы.'));
 };
