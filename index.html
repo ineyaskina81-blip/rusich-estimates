@@ -329,7 +329,7 @@ function nextEstimateNumber(date) {
 function nextStep(row) {
   if (!row.name || row.volume == null) return 0;
   if (row.category === 'Механизмы' && row.hours == null) return 1;
-  if (row.supplyPrice == null && !row.supplySkipped) return 2;
+  if (row.category !== 'Работы' && row.supplyPrice == null && !row.supplySkipped) return 2;
   if (row.customerPrice == null) return 3;
   return 4;
 }
@@ -503,7 +503,7 @@ function positionPicker() {
 function stepForm(index, row, prices, canSkipSupply) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
-    'Укажите название, раздел, единицу измерения и объём. Для механизмов следующим шагом будет ввод часов. Остальные позиции сразу попадут в ОМТС.',
+    'Выберите позицию и укажите объём. Работы передаются коммерческому директору, механизмы — главному инженеру, остальные позиции — в ОМТС.',
     'Укажите общее количество часов работы механизма по этой позиции.',
     'Выберите закупочную цену из справочника или введите цену ОМТС.',
     'Выберите расценку или введите цену для заказчика, затем подтвердите её.'
@@ -545,7 +545,8 @@ function renderDrawer(row, status = '') {
     ...(row.customerRate ? [['Источник цены заказчику', row.customerRate]] : [])
   ] : [];
   const route = steps.map((step, position) => {
-    const skipped = index > 0 && position === 1 && row.category !== 'Механизмы';
+    const skipped = row && ((position === 1 && row.category !== 'Механизмы') ||
+      (position === 2 && (row.category === 'Работы' || row.supplySkipped)));
     return '<li' + (position === index ? ' aria-current="step"' : '') + '><span class="step-icon" aria-hidden="true">' +
       (skipped ? '–' : position < index ? '✓' : position + 1) + '</span><span>' + step.role + '</span><span class="route-status">' +
       (skipped ? 'Не требуется' : position === index ? 'Сейчас' : position < index ? 'Выполнено' : 'Ожидает') + '</span></li>';
@@ -618,7 +619,8 @@ function renderDrawer(row, status = '') {
       const selection = categories.indexOf(categorySelect.value);
       if (selection >= 0) form.elements.namedItem('unit').value = defaultUnits[selection];
       form.querySelector('button[type="submit"]').textContent =
-        selection < 0 || selection === 2 ? steps[0].action : 'Передать в ОМТС';
+        categorySelect.value === 'Работы' ? steps[2].action :
+        categorySelect.value === 'Механизмы' || selection < 0 ? steps[0].action : steps[1].action;
     };
     categorySelect.onchange = setUnit;
     setUnit();
