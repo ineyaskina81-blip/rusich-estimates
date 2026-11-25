@@ -412,16 +412,22 @@ function renderList() {
   draw();
 }
 
+function lineAmountCents(volume, unitPrice) {
+  if (volume == null || unitPrice == null) return null;
+  const amount = volume * unitPrice;
+  return Math.round((amount + Number.EPSILON * amount) * 100);
+}
+
 function renderCard() {
   const estimate = activeEstimate;
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
-  const approvedTotal = ready.reduce((total, row) => total + row.volume * row.customerPrice, 0);
+  const approvedTotalCents = ready.reduce((total, row) => total + lineAmountCents(row.volume, row.customerPrice), 0);
   const subtitle = [estimate.scope, estimate.client].filter(Boolean).join(' · ');
   crumb.innerHTML = '<a href="#estimates">Сметы</a><span aria-hidden="true">/</span><span aria-current="page">№ ' + estimate.id + '</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
     '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div></div>' +
     '<section class="stats" aria-label="Сводка по позициям">' + stat('Подтверждено позиций', ready.length + ' из ' + estimate.rows.length) +
-    stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money(approvedTotal), 'По согласованным позициям') + '</section>' +
+    stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money(approvedTotalCents / 100), 'По согласованным позициям') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
     '<button class="btn primary compact" id="add" type="button">+ Добавить позицию</button></div>' +
@@ -443,15 +449,21 @@ function renderCard() {
     });
     const rows = visible.map(row => {
       const step = steps[nextStep(row)];
+      const basePrice = baseCatalogPrice(row);
+      const unitPrice = row.customerPrice ?? basePrice?.value;
+      const amountCents = lineAmountCents(row.volume, unitPrice);
       return '<tr><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
         '</button><span class="secondary">' + esc(row.category) + '</span></td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
         '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
-        money(row.customerPrice ?? baseCatalogPrice(row)?.value) +
-        (row.customerPrice == null && baseCatalogPrice(row) ? '<span class="secondary">Из справочника</span>' : '') + '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
+        money(unitPrice) +
+        (row.customerPrice == null && basePrice ? '<span class="secondary">Из справочника</span>' : '') +
+        '</td><td class="num">' + money(amountCents == null ? null : amountCents / 100) +
+        (amountCents != null && step ? '<span class="secondary">Предварительно</span>' : '') +
+        '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
         '</span></td><td>' + (step ? step.role : '—') + '</td></tr>';
     });
     const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Нажмите «Добавить позицию».';
-    document.querySelector('#results').innerHTML = table(['Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
+    document.querySelector('#results').innerHTML = table(['Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
       '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimate.rows.length + '</div>';
   };
   document.querySelector('#categories').onclick = event => {
