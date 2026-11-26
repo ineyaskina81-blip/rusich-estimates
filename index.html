@@ -561,10 +561,26 @@ function renderList() {
   draw();
 }
 
+function decimalParts(value) {
+  const [decimal, exponent = '0'] = String(value).toLowerCase().split('e');
+  const [whole, fraction = ''] = decimal.split('.');
+  return { coefficient: BigInt(whole + fraction), scale: fraction.length - Number(exponent) };
+}
+
 function lineAmountCents(volume, unitPrice) {
   if (volume == null || unitPrice == null) return null;
-  const amount = volume * unitPrice;
-  return Math.round((amount + Number.EPSILON * amount) * 100);
+  const quantity = Number(volume);
+  const price = Number(unitPrice);
+  if (!Number.isFinite(quantity) || !Number.isFinite(price)) return null;
+  const units = decimalParts(quantity);
+  const tariff = decimalParts(price);
+  const coefficient = units.coefficient * tariff.coefficient;
+  const scale = units.scale + tariff.scale - 2;
+  if (scale <= 0) return Number(coefficient * 10n ** BigInt(-scale));
+  const divisor = 10n ** BigInt(scale);
+  const magnitude = coefficient < 0n ? -coefficient : coefficient;
+  const cents = (magnitude + divisor / 2n) / divisor;
+  return Number(coefficient < 0n ? -cents : cents);
 }
 
 function readEstimateNumber(raw, resolveReference) {
