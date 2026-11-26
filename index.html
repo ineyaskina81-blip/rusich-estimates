@@ -1123,6 +1123,7 @@ function focusInlineEntry() {
 const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
 const previewPriceKinds = { ...priceKinds, history: 'Историческая цена' };
 const directorCanEditVolume = category => category === 'Работы' || category === 'Материалы';
+const canAddWithoutCatalogPrice = category => directorCanEditVolume(category) || category === 'Прочее' || category === 'Механизмы';
 const needsDirectorPrice = item => item?.category === 'Материалы' &&
   String(item.name ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru') === 'расходные материалы';
 const baseCatalogPrice = row => needsDirectorPrice(row) ? null : row?.basePrice ?? row?.baseWorkPrice;
@@ -1182,7 +1183,7 @@ function positionPicker() {
 function stepForm(index, row, prices) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
-    'Выберите расценку из справочника или введите название работы или материала вручную. Укажите объём. Цену ручной строки внесёт коммерческий директор.',
+    'Выберите расценку из справочника или заполните поле «Название позиции» вручную. Укажите тип позиции, единицу измерения и объём.',
     'Сверьте объём по проекту и при необходимости скорректируйте его. Укажите общее время работы техники.',
     'Выберите закупочную цену из справочника или введите цену ОМТС.',
     directorCanEditVolume(row?.category) ? 'Проверьте объём и цену за единицу. При необходимости исправьте их.' :
@@ -1362,7 +1363,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     const directorPrice = needsDirectorPrice({
       category, name: form.elements.namedItem('name').value
     });
-    const needsCatalogPrice = category && category !== 'Механизмы' && !directorCanEditVolume(category);
+    const needsCatalogPrice = category && !canAddWithoutCatalogPrice(category);
     basePrices = position?.category === category ? pricesForPosition(position, 3) : [];
     const originalRate = baseCatalogPrice(originalRow);
     if (originalRate && originalRow.category === category &&
@@ -1374,7 +1375,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       ? '<label>Расценка за единицу<select id="base-price" required>' +
         basePrices.map((price, i) => '<option value="' + i + '"' + (i === selectedPrice ? ' selected' : '') + '>' + esc(priceOption(price)) + '</option>').join('') +
         '</select></label>'
-      : directorPrice || directorCanEditVolume(category) ? '<p class="note">Строку можно добавить без цены. Цену укажет коммерческий директор.</p>'
+      : directorPrice || (canAddWithoutCatalogPrice(category) && category !== 'Механизмы') ? '<p class="note">Строку можно добавить без цены. Цену укажет коммерческий директор.</p>'
       : needsCatalogPrice
         ? '<p class="note">' + (position?.category === category ? 'У этой позиции нет доступной цены. Выберите другую позицию.' :
           'Выберите позицию из загруженного справочника.') + '</p>'
@@ -1540,7 +1541,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       const selected = surface.querySelector('#base-price');
       const directorPrice = needsDirectorPrice(row);
       const price = !directorPrice && (matchesCatalog || sameItem) && selected && basePrices[selected.value];
-      if (!price && !sameItem && row.category !== 'Механизмы' && !directorCanEditVolume(row.category)) {
+      if (!price && !sameItem && !canAddWithoutCatalogPrice(row.category)) {
         baseRateError.textContent = 'Выберите позицию и готовую расценку из справочника.';
         (selected || positionQuery || document.querySelector('#load-catalog')).focus();
         return;
