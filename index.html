@@ -1231,9 +1231,9 @@ function stepForm(index, row, prices) {
     (index === 0 && row ? '<button class="btn" type="button" id="cancel-line-edit">Отменить редактирование</button>' : '') + '</form>';
 }
 
-function renderDrawer(row, status = '', editingCustomerPrice = false) {
+function renderDrawer(row, status = '', editingPriceStep) {
   const stage = estimateStage(activeEstimate);
-  const index = editingCustomerPrice ? 3 : nextStep(row, stage);
+  const index = editingPriceStep ?? nextStep(row, stage);
   const basePrice = baseCatalogPrice(row);
   const prices = index === 2 || (index === 3 && !basePrice) ? availablePrices(row, index) : [];
   const canAct = index === stage || index === 4;
@@ -1270,6 +1270,8 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     (status ? '<p class="handoff" id="drawer-status" role="status">' + esc(status) + '</p>' : '') +
     (canAct && index !== 0 ? stepForm(index, row, prices) :
       '<p class="note">Действие доступно на этапе «' + steps[index].role + '».</p>') +
+    (stage === 2 && index !== 2 && needsOmtsPrice(row, stage) && row.supplyPrice != null ?
+      '<button class="btn" id="adjust-supply-price" type="button">Скорректировать цену ОМТС</button>' : '') +
     (index === 4 && stage === 3 ? '<button class="btn" id="adjust-customer-price" type="button">' +
       (directorCanEditVolume(row.category) ? 'Скорректировать цену и объём' : 'Скорректировать цену заказчику') + '</button>' : '') +
     (row && activeEstimate.sections?.length ?
@@ -1302,14 +1304,17 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
       notify(saved ? 'Раздел позиции сохранён.' : 'Раздел изменён до обновления страницы.');
     };
   }
-  const adjustPrice = dialog.querySelector('#adjust-customer-price');
-  if (adjustPrice) {
-    adjustPrice.onclick = () => {
-      renderDrawer(row, '', true);
-      dialog.querySelector('[name="customerPrice"]').focus();
+  for (const [id, step, field] of [
+    ['#adjust-supply-price', 2, 'supplyPrice'], ['#adjust-customer-price', 3, 'customerPrice']
+  ]) {
+    const button = dialog.querySelector(id);
+    if (!button) continue;
+    button.onclick = () => {
+      renderDrawer(row, '', step);
+      dialog.querySelector('[name="' + field + '"]').focus();
     };
   }
-  if (canAct && index !== 0) bindPositionForm(dialog, index, row, prices, basePrice, editingCustomerPrice);
+  if (canAct && index !== 0) bindPositionForm(dialog, index, row, prices, basePrice, editingPriceStep === 3);
 }
 
 function bindPositionForm(surface, index, row, prices = [], basePrice, editingCustomerPrice = false) {
@@ -1332,6 +1337,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
   }
   const priceSelect = surface.querySelector('#catalog-price');
   const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
+  if (index === 2) priceField.value = row.supplyPrice ?? '';
   if (index === 3) {
     priceField.value = row.customerPrice ?? basePrice?.value ?? row.supplyPrice ?? '';
     if (directorCanEditVolume(row.category)) form.elements.namedItem('volume').value = row.volume;
@@ -1598,14 +1604,21 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       cardFilters = { query: '', category: 'all', role: 'all' };
     } else {
       const key = ['volume', 'hours', 'supplyPrice', 'customerPrice'][index];
+      const previousValue = row[key];
       row[key] = Number(fields.get(key));
       if (index === 1) {
         row.volume = hourlyUnit(row.unit) ? row.hours : Number(fields.get('volume'));
         row.volumeChecked = true;
       }
-      if (index === 2) delete row.supplySkipped;
       const price = chosenPrice();
-      if (index === 2) row.supplyVat = price?.value === row.supplyPrice ? price.vat : null;
+      if (index === 2) {
+        delete row.supplySkipped;
+        if (price?.value === row.supplyPrice) row.supplyVat = price.vat;
+        else if (previousValue !== row.supplyPrice) {
+          delete row.supplyRate;
+          row.supplyVat = 'С НДС';
+        }
+      }
       if (index === 3) {
         if (directorCanEditVolume(row.category)) row.volume = Number(fields.get('volume'));
         row.customerVat = basePrice?.vat ?? price?.vat ??
