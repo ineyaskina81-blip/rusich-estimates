@@ -45,6 +45,7 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .workflow-panel{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px}
 .workflow-panel h2{font-size:17px;margin:0 0 4px}
 .workflow-panel .note{margin:0}
+.workflow-panel .btn:disabled{opacity:.5;cursor:default}
 .section-band td{background:#1945a8;color:#fff;font-weight:750;border-left:5px solid #123582}
 .subsection-band td{background:#dce8ff;color:#13387f;padding-left:28px;font-weight:700;border-left:5px solid #7b9dde}
 .section-total td{background:#edf3ff;color:#13387f;font-weight:700;border-top:2px solid #b4c9ee}
@@ -872,8 +873,8 @@ function renderCard(resetEntry = false) {
   }[nextEstimateStage(estimate, stage)];
   const stageText = {
     0: 'Заполните все позиции и объёмы, затем передайте смету целиком.',
-    2: 'Откройте строки техники и доставки и подтвердите закупочные цены. Осталось: ' + waiting + '.',
-    1: 'Откройте строки техники и подтвердите объёмы. Осталось: ' + waiting + '.',
+    2: waiting ? 'Перед передачей сметы подтвердите закупочные цены по оставшимся позициям.' : 'Все закупочные цены подтверждены.',
+    1: waiting ? 'Перед передачей сметы подтвердите объёмы по оставшимся позициям.' : 'Все объёмы техники подтверждены.',
     3: waiting ? 'Проверьте цены для заказчика. Осталось: ' + waiting + '.' : 'Все цены для заказчика подтверждены.'
   };
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
@@ -899,9 +900,10 @@ function renderCard(resetEntry = false) {
     stat('Требуют действия', estimate.rows.length - ready.length) + stat('ИТОГО по смете', money(totals.subtotal / 100)) + '</section>' +
     '<section class="panel panel-head workflow-panel" aria-labelledby="workflow-title"><div>' +
     '<h2 id="workflow-title" tabindex="-1">Этап сметы · ' + steps[stage].role + '</h2><p class="note">' + stageText[stage] + '</p></div>' +
-    (stage === 3 ? '' : '<button class="btn primary" id="advance-estimate" type="button"' +
-      (!estimate.rows.length || waiting ? ' disabled' : '') + '>' + stageButton + '</button>') + '</section>' +
-    '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
+    (waiting ? '<button class="btn primary" id="show-stage-positions" type="button">Показать позиции к проверке (' + waiting + ')</button>' :
+      stage === 3 ? '' : '<button class="btn primary" id="advance-estimate" type="button"' +
+      (!estimate.rows.length ? ' disabled' : '') + '>' + stageButton + '</button>') + '</section>' +
+    '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title" tabindex="-1">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
     '<button class="btn primary" id="add-filtered-line" type="button">+ Добавить расценку</button>' +
     (estimate.rows.length || estimate.sections?.length ? '<button class="btn" id="insert-first-section" type="button">Вставить раздел в начало</button>' : '') +
@@ -1045,6 +1047,13 @@ function renderCard(resetEntry = false) {
   };
   const advanceButton = document.querySelector('#advance-estimate');
   if (advanceButton) advanceButton.onclick = () => advanceEstimate(estimate);
+  const showStagePositions = document.querySelector('#show-stage-positions');
+  if (showStagePositions) showStagePositions.onclick = () => {
+    sectionFilter = '';
+    cardFilters = { query: '', category: 'all', role: steps[stage].role };
+    renderCard();
+    document.querySelector('#card-title').focus();
+  };
   document.querySelector('#add-filtered-line').onclick = () => {
     const category = cardFilters.category;
     let structure = sectionFilter || entryStructure;
@@ -1676,7 +1685,9 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       } else if (editingCustomerPrice) {
         row.customerRate = 'Цена скорректирована коммерческим директором';
       }
-      if (cardFilters.role !== 'all') cardFilters.role = 'all';
+      if (cardFilters.role === steps[index].role && !activeEstimate.rows.some(item => nextStep(item, stage) === stage)) {
+        cardFilters.role = 'all';
+      }
     }
     drawerReturn = row.id;
     const saved = save();
