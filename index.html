@@ -1051,7 +1051,9 @@ function focusInlineEntry() {
 
 const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
 const previewPriceKinds = { ...priceKinds, history: 'Историческая цена' };
-const baseCatalogPrice = row => row?.basePrice ?? row?.baseWorkPrice;
+const needsDirectorPrice = item => item?.category === 'Материалы' &&
+  String(item.name ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru') === 'расходные материалы';
+const baseCatalogPrice = row => needsDirectorPrice(row) ? null : row?.basePrice ?? row?.baseWorkPrice;
 const hourlyUnit = unit => ['ч', 'маш.-ч'].includes(unit);
 
 function availablePrices(row, index) {
@@ -1060,6 +1062,7 @@ function availablePrices(row, index) {
 }
 
 function pricesForPosition(position, index) {
+  if (needsDirectorPrice(position)) return [];
   const date = new Date().toLocaleDateString('sv-SE');
   return (position?.prices ?? []).filter(price => {
     if (index === 2 ? price.kind !== 'supply' : price.kind === 'supply') return false;
@@ -1078,6 +1081,7 @@ function priceOption(price) {
 }
 
 function positionPriceLabel(position) {
+  if (needsDirectorPrice(position)) return 'Цену укажет коммерческий директор';
   const purchase = position.category === 'Механизмы' ? pricesForPosition(position, 2)[0] : null;
   const price = purchase ?? pricesForPosition(position, 3)[0];
   return price ? money(price.value) + '/' + position.unit + ' · ' + previewPriceKinds[price.kind] +
@@ -1269,7 +1273,10 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
   function renderBaseRate() {
     const position = chosenPosition;
     baseRateError.textContent = '';
-    const needsCatalogPrice = categorySelect.value && categorySelect.value !== 'Механизмы';
+    const directorPrice = needsDirectorPrice({
+      category: categorySelect.value, name: form.elements.namedItem('name').value
+    });
+    const needsCatalogPrice = categorySelect.value && categorySelect.value !== 'Механизмы' && !directorPrice;
     basePrices = position?.category === categorySelect.value ? pricesForPosition(position, 3) : [];
     const originalRate = baseCatalogPrice(originalRow);
     if (originalRate && originalRow.category === categorySelect.value &&
@@ -1281,6 +1288,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       ? '<label>Расценка за единицу<select id="base-price" required>' +
         basePrices.map((price, i) => '<option value="' + i + '"' + (i === selectedPrice ? ' selected' : '') + '>' + esc(priceOption(price)) + '</option>').join('') +
         '</select></label>'
+      : directorPrice ? '<p class="note">Цену укажет коммерческий директор.</p>'
       : needsCatalogPrice
         ? '<p class="note">' + (position?.category === categorySelect.value ? 'У этой позиции нет доступной цены. Выберите другую позицию.' :
           'Выберите позицию из загруженного справочника.') + '</p>'
@@ -1306,7 +1314,10 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     }
     setUnit();
     if (originalRow) form.elements.namedItem('unit').value = originalRow.unit;
-    form.elements.namedItem('name').oninput = event => event.target.setCustomValidity('');
+    form.elements.namedItem('name').oninput = event => {
+      event.target.setCustomValidity('');
+      renderBaseRate();
+    };
   }
   if (positionQuery) {
     const suggestions = surface.querySelector('#catalog-suggestions');
@@ -1332,6 +1343,8 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       const category = categorySelect.value;
       const found = query ? catalog.positions.filter(position => {
         if (category && position.category !== category) return false;
+        if (needsDirectorPrice(position) && position.unit !== 'компл.' &&
+          !query.includes(position.code.toLocaleLowerCase('ru'))) return false;
         const text = (position.name + ' ' + position.code).toLocaleLowerCase('ru').replaceAll('ё', 'е');
         const words = text.match(/[а-я]+/g) ?? [];
         return categories.includes(position.category) && tokens.every(raw => {
@@ -1343,6 +1356,9 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         });
       }) : [];
       showSuggestions(false);
+      const exactName = query.replace(/\s+/g, ' ');
+      const matchesName = position => position.name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru') === exactName;
+      found.sort((a, b) => Number(matchesName(b)) - Number(matchesName(a)));
       matches = found.slice(0, 50);
       suggestions.innerHTML = matches.map((position, i) =>
         '<div id="catalog-option-' + i + '" class="catalog-option" role="option" aria-selected="false" data-result="' + i + '">' +
@@ -1436,8 +1452,9 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       const sameItem = !!originalRow && row.category === originalRow.category && row.unit === originalRow.unit &&
         (!position || position.code === originalRow.catalogCode);
       const selected = surface.querySelector('#base-price');
-      const price = (matchesCatalog || sameItem) && selected && basePrices[selected.value];
-      if (!price && !sameItem && row.category !== 'Механизмы') {
+      const directorPrice = needsDirectorPrice(row);
+      const price = !directorPrice && (matchesCatalog || sameItem) && selected && basePrices[selected.value];
+      if (!price && !sameItem && row.category !== 'Механизмы' && !directorPrice) {
         baseRateError.textContent = 'Выберите позицию и готовую расценку из справочника.';
         (selected || positionQuery || document.querySelector('#load-catalog')).focus();
         return;
@@ -1457,7 +1474,10 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
           delete row.customerVat;
         }
       }
-      if (price) row.basePrice = { ...price };
+      if (directorPrice) {
+        delete row.basePrice;
+        delete row.baseWorkPrice;
+      } else if (price) row.basePrice = { ...price };
       if (matchesCatalog) row.catalogCode = position.code;
       row.structure = fields.get('structure') || '';
       if (!originalRow && !row.structure && activeEstimate.sections?.length && !entryPlacement?.afterId) {
