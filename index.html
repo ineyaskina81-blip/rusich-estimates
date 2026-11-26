@@ -567,14 +567,14 @@ function lineAmountCents(volume, unitPrice) {
   return Math.round((amount + Number.EPSILON * amount) * 100);
 }
 
-function readEstimateNumber(raw) {
+function readEstimateNumber(raw, resolveReference) {
   const input = raw.trim();
   const formula = input.startsWith('=');
   const expression = (formula ? input.slice(1) : input).trim()
     .replace(/(?<=\d)[ \u00a0\u202f](?=\d{3}(?:\D|$))/g, '').replaceAll(',', '.');
   const number = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
   if (!formula) return number.test(expression) ? Number(expression) : NaN;
-  const tokens = expression.match(/\d+(?:\.\d*)?|\.\d+|\S/g) ?? [];
+  const tokens = expression.match(/@\d+|\d+(?:\.\d*)?|\.\d+|\S/g) ?? [];
   let index = 0;
   const take = token => tokens[index] === token && ++index;
 
@@ -586,6 +586,7 @@ function readEstimateNumber(raw) {
       return take(')') ? value : NaN;
     }
     const token = tokens[index++];
+    if (token?.startsWith('@')) return resolveReference?.(token.slice(1)) ?? NaN;
     return number.test(token) ? Number(token) : NaN;
   }
 
@@ -594,6 +595,7 @@ function readEstimateNumber(raw) {
     while (tokens[index] === '*' || tokens[index] === '/') {
       const operator = tokens[index++];
       const operand = atom();
+      if (operator === '/' && operand === 0) return NaN;
       value = operator === '*' ? value * operand : value / operand;
     }
     return value;
@@ -610,7 +612,30 @@ function readEstimateNumber(raw) {
   }
 
   const result = sum();
-  return index === tokens.length ? result : NaN;
+  return index === tokens.length && Number.isFinite(result) ? Number(result.toPrecision(15)) : NaN;
+}
+
+function validEstimateValue(value) {
+  return Number.isFinite(value) && value >= 0.01 && value <= 100000000;
+}
+
+function evaluateEstimateVolumes(rows) {
+  const byId = new Map(rows.map(row => [row.id, row]));
+  const volumes = new Map();
+  const visiting = new Set();
+  function resolve(id) {
+    if (volumes.has(id)) return volumes.get(id);
+    const row = byId.get(id);
+    if (!row || visiting.has(id)) return NaN;
+    visiting.add(id);
+    const formula = row.formulas?.volume;
+    const value = formula ? readEstimateNumber(formula, resolve) : row.volume;
+    visiting.delete(id);
+    volumes.set(id, value);
+    return value;
+  }
+  for (const row of rows) resolve(row.id);
+  return volumes;
 }
 
 function setEstimateFormula(row, key, value) {
@@ -954,7 +979,13 @@ function moveVisibleEstimateLines(estimate, rows, destination) {
 }
 
 function deleteEstimateLine(row) {
-  if (!row || !window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
+  if (!row) return;
+  const dependent = activeEstimate.rows.find(item => item.formulas?.volume?.match(/@\d+/g)?.includes('@' + row.id));
+  if (dependent) {
+    notify('На эту позицию ссылается формула объёма в строке «' + dependent.name + '». Сначала измените эту формулу.');
+    return;
+  }
+  if (!window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
   const index = [...main.querySelectorAll('[data-delete-line]')].findIndex(button => button.dataset.deleteLine === row.id);
   activeEstimate.rows = activeEstimate.rows.filter(item => item.id !== row.id);
   const section = activeEstimate.sections?.find(item => item.id === row.structure?.split('/')[0]);
@@ -1236,6 +1267,13 @@ function renderCard(resetEntry = false) {
     const structure = previousEntry.querySelector('#inline-structure');
     const selected = structure.querySelector('select')?.value;
     structure.innerHTML = estimate.sections?.length ? structureField(selected ?? entryStructure) : '';
+    const references = previousEntry.querySelector('[data-volume-reference]');
+    if (references) {
+      const selectedReference = references.value;
+      references.innerHTML = '<option value="">Выберите позицию</option>' + volumeReferenceOptions(estimate, editingLine);
+      references.value = estimate.rows.some(row => row.id === selectedReference) ? selectedReference : '';
+      references.onchange?.();
+    }
   } else {
     renderInlineEntry();
   }
@@ -1361,6 +1399,12 @@ function positionPicker() {
     '<p class="note" id="catalog-matches" role="status"></p></fieldset>';
 }
 
+function volumeReferenceOptions(estimate, row) {
+  return orderedGroups(estimate).flatMap(groupRows).map((item, position) =>
+    item.id === row?.id ? '' : '<option value="' + esc(item.id) + '">№ ' + (position + 1) + ' · ' +
+      esc(item.name) + ' · ' + quantity(item.volume) + ' ' + esc(item.unit) + '</option>').join('');
+}
+
 function stepForm(index, row, prices) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
@@ -1375,6 +1419,7 @@ function stepForm(index, row, prices) {
     (required ? ' required' : '') + '></label>';
   const draftField = () => numericField('Предварительная цена за единицу, ₽', 'draftPrice', false);
   const volumeField = () => numericField('Объём, ' + esc(row.unit), 'volume');
+  const referenceOptions = volumeReferenceOptions(activeEstimate, row);
   const fields = [
     () => '<label>Название позиции<input name="name" required maxlength="500" placeholder="Например, мини-экскаватор"></label>' +
       '<label>Тип позиции<select name="category" required><option value="">Выберите тип</option>' +
@@ -1403,6 +1448,9 @@ function stepForm(index, row, prices) {
     (index === 0 ? '<div id="inline-structure">' +
       (activeEstimate.sections?.length ? structureField(row?.structure ?? entryStructure) : '') + '</div>' : '') + '</div>' +
     '<p class="note" id="' + (index === 0 ? 'entry-number-help' : 'step-number-help') + '">Введите число или формулу, например =12,5*3.</p>' +
+    (referenceOptions ? '<div class="toolbar"><label>Связать объём с позицией<select data-volume-reference>' +
+      '<option value="">Выберите позицию</option>' + referenceOptions + '</select></label>' +
+      '<button class="btn" data-insert-volume-reference type="button" disabled>Вставить ссылку в объём</button></div>' : '') +
     (index === 0 ? '<div id="base-rate"></div><p class="note" id="base-rate-error" role="alert"></p>' : '') +
     '<button class="btn primary" type="submit">' + (index === 0 ? (row ? 'Сохранить изменения' : 'Добавить расценку') : steps[index].action) + '</button>' +
     (index === 0 && row ? '<button class="btn" type="button" id="cancel-line-edit">Отменить редактирование</button>' : '') + '</form>';
@@ -1508,6 +1556,24 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
   priceField.value = displayNumber(priceKey, index === 2 ? row.supplyPrice ?? row.formulas?.draftPrice ?? omtsCatalogRate(row)?.value :
     index === 3 ? row.formulas?.[estimateLinePrice(row).field] ?? estimateLinePrice(row).value : row?.draftPrice);
   for (const input of [volumeField, priceField]) input.oninput = () => input.setCustomValidity('');
+  const referenceSelect = form.querySelector('[data-volume-reference]');
+  const insertReference = form.querySelector('[data-insert-volume-reference]');
+  if (referenceSelect && insertReference) {
+    referenceSelect.onchange = () => { insertReference.disabled = !referenceSelect.value; };
+    insertReference.onclick = () => {
+      if (!referenceSelect.value) return;
+      const reference = '@' + referenceSelect.value;
+      if (String(volumeField.value).startsWith('=')) {
+        const start = Math.max(1, volumeField.selectionStart ?? volumeField.value.length);
+        const end = Math.max(start, volumeField.selectionEnd ?? start);
+        volumeField.setRangeText(reference, start, end, 'end');
+      } else {
+        volumeField.value = '=' + reference;
+      }
+      volumeField.setCustomValidity('');
+      volumeField.focus();
+    };
+  }
   const copyPrice = surface.querySelector('#copy-price');
   if (copyPrice) {
     copyPrice.onclick = () => {
@@ -1722,16 +1788,30 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     if ((index !== 0 || originalRow) && stage !== index) return;
     const fields = new FormData(form);
     const volumeText = fields.get('volume').trim();
-    const volume = readEstimateNumber(volumeText);
+    const nextId = activeEstimate.rows.reduce((max, item) => Math.max(max, Number(item.id)), 0) + 1;
+    const rowId = (index === 0 ? originalRow?.id : row.id) ?? String(nextId);
+    const candidate = { id: rowId, volume: readEstimateNumber(volumeText) };
+    setEstimateFormula(candidate, 'volume', volumeText);
+    const volumes = evaluateEstimateVolumes([...activeEstimate.rows.filter(item => item.id !== rowId), candidate]);
+    const volume = volumes.get(rowId);
     const priceText = fields.get(priceKey).trim();
     const priceRequired = index === 3 || (index === 2 && needsOmtsPrice(row, stage));
     const amount = !priceText && !priceRequired ? null : readEstimateNumber(priceText);
     for (const [field, value] of [[volumeField, volume], [priceField, amount]]) {
-      if (value !== null && (!Number.isFinite(value) || value < 0.01 || value > 100000000)) {
-        field.setCustomValidity('Введите число или формулу с результатом от 0,01 до 100 000 000.');
+      if (value !== null && !validEstimateValue(value)) {
+        field.setCustomValidity(field === volumeField && volumeText.includes('@') ?
+          'Проверьте ссылки на позиции и результат. Формула объёма не может ссылаться на себя прямо или через другие строки.' :
+          'Введите число или формулу с результатом от 0,01 до 100 000 000.');
         field.reportValidity();
         return;
       }
+    }
+    const invalidDependent = activeEstimate.rows.find(item => item.id !== rowId && item.formulas?.volume &&
+      !validEstimateValue(volumes.get(item.id)));
+    if (invalidDependent) {
+      volumeField.setCustomValidity('После изменения формула объёма в позиции «' + invalidDependent.name + '» даёт недопустимый результат.');
+      volumeField.reportValidity();
+      return;
     }
     if (index === 0) {
       const name = fields.get('name').trim();
@@ -1741,8 +1821,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         input.reportValidity();
         return;
       }
-      const nextId = activeEstimate.rows.reduce((max, item) => Math.max(max, Number(item.id)), 0) + 1;
-      row = makeRow(originalRow?.id ?? String(nextId), name, resolvedCategory(), fields.get('unit'),
+      row = makeRow(rowId, name, resolvedCategory(), fields.get('unit'),
         volume, null, null, null);
       const position = chosenPosition;
       const matchesCatalog = position && position.unit === row.unit && position.category === row.category &&
@@ -1872,6 +1951,13 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       if (cardFilters.role === steps[index].role && !rowsBlockingHandoff(activeEstimate, stage).length) {
         cardFilters.role = 'all';
         cardFilters.blockingOnly = false;
+      }
+    }
+    for (const item of activeEstimate.rows) {
+      if (item.id === rowId || !item.formulas?.volume) continue;
+      item.volume = volumes.get(item.id);
+      if (item.category === 'Механизмы' && hourlyUnit(item.unit) && (item.hours != null || item.volumeChecked)) {
+        item.hours = item.volume;
       }
     }
     drawerReturn = row.id;
