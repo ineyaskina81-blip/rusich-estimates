@@ -841,9 +841,12 @@ function moveVisibleEstimateLines(estimate, rows, destination) {
 }
 
 function deleteEstimateLine(row) {
-  if (!row || estimateStage(activeEstimate) !== 0 ||
-    !window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
+  if (!row || !window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
+  const index = [...main.querySelectorAll('[data-delete-line]')].findIndex(button => button.dataset.deleteLine === row.id);
   activeEstimate.rows = activeEstimate.rows.filter(item => item.id !== row.id);
+  const section = activeEstimate.sections?.find(item => item.id === row.structure?.split('/')[0]);
+  if (section?.layout) section.layout = section.layout.filter(key => key !== 'r:' + row.id);
+  if (entryPlacement?.afterId === row.id) setEntryStructure(entryStructure, false);
   if (editingLine === row) {
     editingLine = null;
     renderInlineEntry();
@@ -851,7 +854,9 @@ function deleteEstimateLine(row) {
   if (dialog.open) dialog.close();
   const saved = save();
   renderCard();
-  focusInlineEntry();
+  const remaining = main.querySelectorAll('[data-delete-line]');
+  const focusTarget = remaining[Math.min(Math.max(0, index), remaining.length - 1)] || document.querySelector('#add-filtered-line');
+  focusTarget?.focus({ preventScroll: true });
   notify(saved ? 'Строка удалена.' : 'Строка удалена до обновления страницы.');
 }
 
@@ -958,8 +963,8 @@ function renderCard(resetEntry = false) {
       const { value: unitPrice, source: previewSource } = estimateLinePrice(row);
       const amountCents = lineAmountCents(row.volume, unitPrice);
       const controls = '<div class="row-controls">' +
-        (stage === 0 ? '<button type="button" class="btn" data-edit-line="' + esc(row.id) +
-          '">Изменить</button><button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить</button>' : '') +
+        (stage === 0 ? '<button type="button" class="btn" data-edit-line="' + esc(row.id) + '">Изменить</button>' : '') +
+        '<button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить строку</button>' +
         '<button type="button" class="btn" data-add-after-line="' + esc(row.id) + '">Добавить расценку после</button>' +
         '<button type="button" class="btn" data-insert-after-line="' + esc(row.id) + '">Вставить после</button></div>';
       return '<tr' + (unitPrice == null ? ' class="unpriced-row"' : '') + '><td class="num">' + positionNumbers.get(row.id) +
@@ -1307,14 +1312,14 @@ function renderDrawer(row, status = '', editingPriceStep) {
     (row && activeEstimate.sections?.length ?
       '<form class="action position-structure" id="change-structure"><div class="fields">' +
       structureField(row.structure) + '</div><button class="btn" type="submit">Сохранить раздел</button></form>' : '') +
-    (stage === 0 && row ? '<button class="btn" id="edit-position" type="button">Изменить строку</button>' +
-      '<button class="btn delete-row" id="delete-position" type="button">Удалить строку</button>' : '') +
+    (stage === 0 && row ? '<button class="btn" id="edit-position" type="button">Изменить строку</button>' : '') +
+    (row ? '<button class="btn delete-row" id="delete-position" type="button">Удалить строку</button>' : '') +
     '</div></div>';
   for (const button of dialog.querySelectorAll('[data-close-drawer]')) {
     button.onclick = () => dialog.close();
   }
+  if (row) dialog.querySelector('#delete-position').onclick = () => deleteEstimateLine(row);
   if (stage === 0 && row) {
-    dialog.querySelector('#delete-position').onclick = () => deleteEstimateLine(row);
     dialog.querySelector('#edit-position').onclick = () => {
       editingLine = row;
       dialog.close();
