@@ -269,7 +269,7 @@ const priceCatalog = (() => {
       });
     }
     for (const row of await sheet('История', 'Код цены')) {
-      const price = row['Категория'] === 'Материалы' && typeof row['Цена для сметы, руб.'] === 'number'
+      const price = typeof row['Цена для сметы, руб.'] === 'number'
         ? row['Цена для сметы, руб.'] : row['Цена, руб.'];
       add(row['Код позиции'], row, 'history', price, iso(row['Дата по источнику']));
     }
@@ -1199,8 +1199,9 @@ function stepForm(index, row, prices) {
       '</select></label>' + numericField('Объём', 'volume') + '</div>',
     () => (hourlyUnit(row.unit) ? '' : numericField('Объём, ' + esc(row.unit), 'volume')) +
       numericField(hourlyUnit(row.unit) ? 'Объём, ' + esc(row.unit) : 'Часы работы, ч', 'hours'),
-    () => numericField('Цена ОМТС за единицу, ₽', 'supplyPrice'),
-    () => numericField('Цена заказчику за единицу, ₽', 'customerPrice') +
+    () => numericField('Цена ОМТС за единицу с НДС, ₽', 'supplyPrice'),
+    () => numericField(categoryGroup(row.category) === 'Механизмы' ?
+      'Цена заказчику за единицу с НДС, ₽' : 'Цена заказчику за единицу, ₽', 'customerPrice') +
       (row?.supplyPrice != null ? '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>' : '')
   ];
   const title = index === 0 ? '<h3 id="inline-position-title">' +
