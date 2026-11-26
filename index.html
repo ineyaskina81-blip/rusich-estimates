@@ -56,6 +56,10 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .entry-target{margin:0 0 10px;color:var(--muted)}
 .estimate-total-bar{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;margin-bottom:16px;padding:10px 16px;color:var(--brand-dark);background:var(--soft)}
 .estimate-total-bar strong{font-size:19px}
+.estimate-section-tools{display:flex;align-items:center;flex-wrap:wrap;gap:6px;max-width:100%}
+.estimate-section-tools .btn,.estimate-section-tools select{min-height:34px}
+.estimate-section-tools select{max-width:min(240px,100%);background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px}
+.estimate-section-tools .btn:disabled{opacity:.5;cursor:default}
 .estimate-totals{margin-top:16px;padding-bottom:16px}
 .estimate-totals .detail{margin:10px 0 0;display:block}
 .estimate-totals .detail>div{display:flex;justify-content:space-between;gap:12px;padding:8px 0}
@@ -379,6 +383,7 @@ let sectionFilter = '';
 let entryStructure = '';
 let entryPlacement = null;
 let sectionInsertion = null;
+let sectionToolbarScroll = null;
 let editingLine = null;
 let drawerReturn;
 let toastTimer;
@@ -721,8 +726,9 @@ function insertEstimateLine(estimate, row, placement) {
   estimate.rows.splice(index < 0 ? estimate.rows.length : index + (placement?.atStart ? 0 : 1), 0, row);
 }
 
-function showSectionForm(parentId = '', insertion = null) {
+function showSectionForm(parentId = '', insertion = null, fromToolbar = false) {
   sectionInsertion = insertion;
+  sectionToolbarScroll = fromToolbar ? window.scrollY : null;
   sectionForm.reset();
   const parent = sectionForm.elements.namedItem('parent');
   const anchorStructure = activeEstimate.rows.find(row => row.id === insertion?.rowId)?.structure;
@@ -744,7 +750,7 @@ function showSectionForm(parentId = '', insertion = null) {
   sectionForm.elements.namedItem('name').focus();
 }
 
-function deleteEstimateSection(key) {
+function deleteEstimateSection(key, fromToolbar = false) {
   const estimate = activeEstimate;
   if (!estimate) return;
   const [sectionId, childId] = key.split('/');
@@ -759,6 +765,7 @@ function deleteEstimateSection(key) {
     (childId ? 'в раздел «' + section.name + '».' : 'в группу «Без раздела».') : '';
   const childrenNote = !childId && section.children.length ? ' Вместе с подразделами.' : '';
   if (!window.confirm('Удалить ' + kind + ' «' + target.name + '»?' + childrenNote + consequence)) return;
+  const scrollPosition = fromToolbar ? window.scrollY : null;
   const entries = childId ? sectionEntries(estimate, section) : [];
   for (const row of affected) row.structure = destination;
   if (childId) {
@@ -779,7 +786,10 @@ function deleteEstimateSection(key) {
   const saved = save();
   renderCard();
   setEntryStructure(entryStructure, false);
-  document.querySelector('#add-estimate-section')?.focus();
+  const focusTarget = document.querySelector(fromToolbar && estimate.sections.length ?
+    '#section-to-delete' : '#add-estimate-section');
+  focusTarget?.focus({ preventScroll: fromToolbar });
+  if (scrollPosition != null) window.scrollTo(0, scrollPosition);
   notify((childId ? 'Подраздел удалён.' : 'Раздел удалён.') +
     (saved ? '' : ' Изменение доступно до обновления страницы.'));
 }
@@ -848,9 +858,14 @@ function renderCard(resetEntry = false) {
   crumb.innerHTML = '<a href="#estimates">Сметы</a><span aria-hidden="true">/</span><span aria-current="page">№ ' + estimate.id + '</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
     '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div></div>' +
-    '<div class="panel estimate-total-bar" aria-label="Текущий итог сметы"><strong>' +
+    '<div class="panel estimate-total-bar" aria-label="Итог и управление разделами"><div><strong>' +
     (totals.total == null ? 'ИТОГО по смете ' + money(totals.subtotal / 100) : 'ИТОГО с НДС ' + money(totals.total / 100)) +
-    '</strong><span class="note">' + esc(totalNote) + '</span></div>' +
+    '</strong><span class="note secondary">' + esc(totalNote) + '</span></div>' +
+    '<div class="estimate-section-tools"><button class="btn" id="add-estimate-section" type="button">+ Раздел</button>' +
+    '<button class="btn" id="add-estimate-subsection" type="button"' + (estimate.sections?.length ? '' : ' disabled') +
+    '>+ Подраздел</button><select id="section-to-delete" aria-label="Какой раздел или подраздел удалить"' +
+    (estimate.sections?.length ? '' : ' disabled') + '>' + sectionOptions('Раздел для удаления') + '</select>' +
+    '<button class="btn" id="delete-selected-section" type="button" disabled>Удалить</button></div></div>' +
     '<section class="stats" aria-label="Сводка по позициям">' + stat('Подтверждено позиций', ready.length + ' из ' + estimate.rows.length) +
     stat('Требуют действия', estimate.rows.length - ready.length) + stat('ИТОГО по смете', money(totals.subtotal / 100)) + '</section>' +
     '<section class="panel panel-head workflow-panel" aria-labelledby="workflow-title"><div>' +
@@ -859,10 +874,8 @@ function renderCard(resetEntry = false) {
       (!estimate.rows.length || waiting ? ' disabled' : '') + '>' + stageButton + '</button>') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
-    '<div class="group-controls"><button class="btn" id="add-estimate-section" type="button">+ Раздел</button>' +
-    (estimate.sections?.length ? '<button class="btn" id="add-estimate-subsection" type="button">+ Подраздел</button>' : '') +
     (estimate.rows.length || estimate.sections?.length ? '<button class="btn" id="insert-first-section" type="button">Вставить раздел в начало</button>' : '') +
-    '</div></div>' +
+    '</div>' +
     '<div class="tabs" role="group" aria-label="Раздел сметы" id="categories"></div><div class="toolbar">' +
     searchField(cardFilters.query, 'Поиск по названию позиции') +
     filterSelect('role', 'Ответственный за следующий шаг', 'Все ответственные', [...steps.map(step => step.role), 'Готово'], cardFilters.role) +
@@ -1004,12 +1017,16 @@ function renderCard(resetEntry = false) {
   const advanceButton = document.querySelector('#advance-estimate');
   if (advanceButton) advanceButton.onclick = () => advanceEstimate(estimate);
   const addSectionButton = document.querySelector('#add-estimate-section');
-  if (addSectionButton) addSectionButton.onclick = () => showSectionForm();
+  if (addSectionButton) addSectionButton.onclick = () => showSectionForm('', null, true);
   const insertFirstSection = document.querySelector('#insert-first-section');
   if (insertFirstSection) insertFirstSection.onclick = () => showSectionForm('', { edge: 'start' });
   const addSubsectionButton = document.querySelector('#add-estimate-subsection');
-  if (addSubsectionButton) addSubsectionButton.onclick = () =>
-    showSectionForm((entryStructure || sectionFilter).split('/')[0] || estimate.sections[0].id);
+  if (addSubsectionButton && estimate.sections?.length) addSubsectionButton.onclick = () =>
+    showSectionForm((sectionFilter || entryStructure).split('/')[0] || estimate.sections[0].id, null, true);
+  const sectionToDelete = document.querySelector('#section-to-delete');
+  const deleteSelectedSection = document.querySelector('#delete-selected-section');
+  sectionToDelete.onchange = () => { deleteSelectedSection.disabled = !sectionToDelete.value; };
+  deleteSelectedSection.onclick = () => { if (sectionToDelete.value) deleteEstimateSection(sectionToDelete.value, true); };
   document.querySelector('#results').onclick = event => {
     const button = event.target.closest('button');
     if (!button) return;
@@ -1672,6 +1689,8 @@ sectionForm.onsubmit = event => {
   if (!parent) item.children = [];
   insertEstimateGroup(activeEstimate, parent, item, sectionInsertion);
   sectionInsertion = null;
+  const scrollPosition = sectionToolbarScroll;
+  sectionToolbarScroll = null;
   const key = parent ? parent.id + '/' + item.id : item.id;
   activeEstimate.lastEntryStructure = key;
   const saved = save();
@@ -1680,8 +1699,11 @@ sectionForm.onsubmit = event => {
   cardFilters = { query: '', category: 'all', role: 'all' };
   renderCard();
   const enteringPositions = estimateStage(activeEstimate) === 0;
-  setEntryStructure(key, enteringPositions);
-  if (!enteringPositions) document.querySelector('#add-estimate-section')?.focus();
+  setEntryStructure(key, enteringPositions && scrollPosition == null);
+  if (!enteringPositions || scrollPosition != null) {
+    document.querySelector(parent ? '#add-estimate-subsection' : '#add-estimate-section')?.focus({ preventScroll: true });
+  }
+  if (scrollPosition != null) window.scrollTo(0, scrollPosition);
   notify((parent ? 'Подраздел добавлен.' : 'Раздел добавлен.') +
     (saved ? '' : ' Изменение доступно до обновления страницы.'));
 };
@@ -1693,6 +1715,7 @@ function renderScreen(focusHeading = false) {
   if (newEstimateDialog.open) newEstimateDialog.close();
   if (sectionDialog.open) sectionDialog.close();
   sectionInsertion = null;
+  sectionToolbarScroll = null;
   if (estimate !== activeEstimate) {
     cardFilters = { query: '', category: 'all', role: 'all' };
     sectionFilter = '';
