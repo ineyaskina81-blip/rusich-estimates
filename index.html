@@ -516,22 +516,34 @@ function confirmedTotals(rows) {
   }, { subtotal: 0, vatBase: 0 });
 }
 
+function sectionName(name) {
+  return name.replace(/^\s*раздел\s*(?:№\s*)?\d+(?:\s*[.\-–—:]\s*|\s+)(?=\S)/iu, '').trim();
+}
+
+function numberedSectionName(section, index) {
+  return 'Раздел № ' + (index + 1) + '. ' + sectionName(section.name);
+}
+
 function sectionOptions(emptyLabel, selected = '') {
   const option = (id, label) => '<option value="' + esc(id) + '"' +
     (id === selected ? ' selected' : '') + '>' + esc(label) + '</option>';
-  return option('', emptyLabel) + (activeEstimate.sections ?? []).map(section =>
-    option(section.id, section.name) + section.children.map(child =>
-      option(section.id + '/' + child.id, section.name + ' → ' + child.name)).join('')
+  return option('', emptyLabel) + (activeEstimate.sections ?? []).map((section, index) => {
+    const label = numberedSectionName(section, index);
+    return option(section.id, label) + section.children.map(child =>
+      option(section.id + '/' + child.id, label + ' → ' + child.name)).join('');
+  }
   ).join('');
 }
 
 function sectionLabel(estimate, key) {
   if (!key) return '';
   const [sectionId, subsectionId] = key.split('/');
-  const section = estimate.sections?.find(item => item.id === sectionId);
-  if (!section) return '';
+  const index = estimate.sections?.findIndex(item => item.id === sectionId) ?? -1;
+  if (index < 0) return '';
+  const section = estimate.sections[index];
+  const label = numberedSectionName(section, index);
   const child = section.children.find(item => item.id === subsectionId);
-  return child ? section.name + ' → ' + child.name : section.name;
+  return child ? label + ' → ' + child.name : label;
 }
 
 function structureField(selected = '') {
@@ -686,7 +698,7 @@ function showSectionForm(parentId = '', insertion = null) {
   const onlySection = !anchorParent || (insertion?.edge === 'end' && anchorParent === insertion.sectionId);
   parent.innerHTML = (onlySubsection ? '' : '<option value="">Верхний уровень (раздел)</option>') +
     (insertion && onlySection ? [] : sections).map(section =>
-      '<option value="' + esc(section.id) + '">' + esc(section.name) + '</option>').join('');
+      '<option value="' + esc(section.id) + '">' + esc(sectionLabel(activeEstimate, section.id)) + '</option>').join('');
   parent.value = parentId;
   sectionForm.elements.namedItem('name').setCustomValidity('');
   const note = document.querySelector('#section-insertion-note');
@@ -895,7 +907,7 @@ function renderCard(resetEntry = false) {
       const sectionVisible = allRows.some(row => visibleIds.has(row.id));
       const sectionMatches = !sectionFilter || sectionFilter === section?.id || sectionFilter.startsWith(section?.id + '/');
       if (!sectionVisible && !(showEmptyGroups && sectionMatches)) continue;
-      if (section) rows.push(renderHeader(section.id, section.name, false));
+      if (section) rows.push(renderHeader(section.id, sectionLabel(estimate, section.id), false));
       else if (estimate.sections) rows.push(renderHeader('', 'Без раздела', false));
       for (const entry of group.entries) {
         if (entry.row) {
@@ -912,7 +924,7 @@ function renderCard(resetEntry = false) {
       const subtotal = amounts.reduce((sum, amount) => sum + (amount ?? 0), 0);
       const withoutPrice = amounts.filter(amount => amount == null).length;
       const preview = allRows.some(row => row.customerPrice == null);
-      rows.push('<tr class="section-total"><td colspan="6">Итого по разделу «' + esc(section.name) + '»' +
+      rows.push('<tr class="section-total"><td colspan="6">Итого по разделу «' + esc(sectionLabel(estimate, section.id)) + '»' +
         '<div class="group-controls"><button type="button" class="btn" data-section-after="' + esc(section.id) + '">+ Раздел после</button></div></td>' +
         '<td class="num">' + money(subtotal / 100) + '</td><td colspan="2">' +
         (preview ? (withoutPrice ? 'Без цены: ' + withoutPrice + ' · ' : '') + 'Предварительно' : '') +
@@ -1573,11 +1585,13 @@ sectionForm.onsubmit = event => {
   event.preventDefault();
   if (!activeEstimate) return;
   const fields = new FormData(sectionForm);
-  const name = fields.get('name').trim();
+  const enteredName = fields.get('name').trim();
   const sections = activeEstimate.sections ??= [];
   const parent = sections.find(section => section.id === fields.get('parent'));
+  const name = parent ? enteredName : sectionName(enteredName);
   const siblings = parent ? parent.children : sections;
-  const duplicate = siblings.some(item => item.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'));
+  const duplicate = siblings.some(item =>
+    (parent ? item.name : sectionName(item.name)).toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'));
   if (!name || duplicate) {
     const field = sectionForm.elements.namedItem('name');
     field.setCustomValidity(duplicate ? 'Такое наименование уже есть на этом уровне.' : 'Введите наименование.');
