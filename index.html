@@ -54,8 +54,16 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .group-controls,.row-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
 .group-controls .btn,.row-controls .btn{min-height:32px;padding:5px 9px}
 .entry-target{margin:0 0 10px;color:var(--muted)}
-.estimate-totals{margin-top:16px}
-.estimate-totals .detail{margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}
+.estimate-total-bar{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;margin-bottom:16px;padding:10px 16px;color:var(--brand-dark);background:var(--soft)}
+.estimate-total-bar strong{font-size:19px}
+.estimate-totals{margin-top:16px;padding-bottom:16px}
+.estimate-totals .detail{margin:10px 0 0;display:block}
+.estimate-totals .detail>div{display:flex;justify-content:space-between;gap:12px;padding:8px 0}
+.estimate-totals .detail>div+div{border-top:1px solid var(--line)}
+.estimate-totals .detail>div:last-child dt,.estimate-totals .detail>div:last-child dd{font-weight:750;color:var(--brand-dark)}
+.vat-form{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin-top:10px}
+.vat-form label{display:grid;gap:4px;font-size:14px}
+.vat-form input{width:120px}
 .inline-position{padding:18px 22px;border-top:1px solid var(--line)}
 .inline-position .action{margin:0;padding:0;border-top:0}
 .inline-position .action .fields{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
@@ -502,18 +510,43 @@ function lineAmountCents(volume, unitPrice) {
   return Math.round((amount + Number.EPSILON * amount) * 100);
 }
 
-const estimateVatRate = 22;
-const vatCategories = new Set(['Работы', 'Механизмы', 'Доставка']);
-
-function confirmedTotals(rows) {
-  return rows.reduce((totals, row) => {
-    const amount = lineAmountCents(row.volume, row.customerPrice);
-    totals.subtotal += amount;
-    if (vatCategories.has(row.category) && (row.customerVat ?? baseCatalogPrice(row)?.vat) !== 'С НДС') {
-      totals.vatBase += amount;
+function estimateTotals(estimate) {
+  const amounts = { 'Работы': 0, 'Материалы': 0, 'Механизмы': 0, 'Прочее': 0 };
+  let missing = 0;
+  for (const row of estimate.rows) {
+    const amount = lineAmountCents(row.volume, row.customerPrice ?? baseCatalogPrice(row)?.value);
+    if (amount == null) {
+      missing++;
+      continue;
     }
-    return totals;
-  }, { subtotal: 0, vatBase: 0 });
+    const category = Object.hasOwn(amounts, row.category) ? row.category : 'Прочее';
+    amounts[category] += amount;
+  }
+  const subtotal = Object.values(amounts).reduce((sum, amount) => sum + amount, 0);
+  const rate = estimate.vatRate;
+  const vatBase = amounts['Работы'] + amounts['Прочее'];
+  const vat = rate == null ? null : Math.round(vatBase * Math.round(rate * 100) / 10000);
+  return { amounts, subtotal, vat, total: vat == null ? null : subtotal + vat, missing };
+}
+
+function renderEstimateTotals(estimate, totals, stage) {
+  const { amounts, subtotal, vat, total } = totals;
+  const showMoney = value => value == null ? '—' : money(value / 100);
+  const line = (label, value) => '<div><dt>' + label + '</dt><dd>' + showMoney(value) + '</dd></div>';
+  const vatLabel = estimate.vatRate == null ? 'НДС (процент не задан)' : 'НДС ' + quantity(estimate.vatRate) + '%';
+  return '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
+    '<h2 id="estimate-totals-title">Итоги сметы</h2><dl class="detail">' +
+    line('Всего работы', amounts['Работы']) +
+    line('Всего материалы', amounts['Материалы']) +
+    line('Всего машины и механизмы', amounts['Механизмы']) +
+    line('Всего прочее', amounts['Прочее']) +
+    line('ИТОГО по смете', subtotal) + line(vatLabel, vat) +
+    line('ИТОГО с НДС', total) + '</dl>' +
+    '<p class="note">НДС начисляется на работы и прочее. Отдельные строки доставки входят в «Прочее».</p>' +
+    (stage === 3 ? '<form class="vat-form" id="estimate-vat-form">' +
+      '<label>НДС, %<input name="vatRate" type="number" min="0" max="100" step="0.01" required value="' +
+      esc(estimate.vatRate ?? '') + '"></label><button class="btn" type="submit">Сохранить НДС</button></form>' : '') +
+    '</section>';
 }
 
 function sectionName(name) {
@@ -804,14 +837,21 @@ function renderCard(resetEntry = false) {
     3: waiting ? 'Проверьте цены для заказчика. Осталось: ' + waiting + '.' : 'Все цены для заказчика подтверждены.'
   };
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
-  const { subtotal, vatBase } = confirmedTotals(ready);
-  const vatCents = Math.round(vatBase * estimateVatRate / 100);
+  const totals = estimateTotals(estimate);
+  const totalNote = [
+    totals.vat == null ? 'НДС ещё не задан' : '',
+    totals.missing ? 'Без цены: ' + totals.missing : '',
+    ready.length < estimate.rows.length ? 'Предварительно' : ''
+  ].filter(Boolean).join(' · ');
   const subtitle = [estimate.scope, estimate.client].filter(Boolean).join(' · ');
   crumb.innerHTML = '<a href="#estimates">Сметы</a><span aria-hidden="true">/</span><span aria-current="page">№ ' + estimate.id + '</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
     '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div></div>' +
+    '<div class="panel estimate-total-bar" aria-label="Текущий итог сметы"><strong>' +
+    (totals.total == null ? 'ИТОГО по смете ' + money(totals.subtotal / 100) : 'ИТОГО с НДС ' + money(totals.total / 100)) +
+    '</strong><span class="note">' + esc(totalNote) + '</span></div>' +
     '<section class="stats" aria-label="Сводка по позициям">' + stat('Подтверждено позиций', ready.length + ' из ' + estimate.rows.length) +
-    stat('Требуют действия', estimate.rows.length - ready.length) + stat('Подтверждено для заказчика', money((subtotal + vatCents) / 100), 'С учётом начисленного НДС') + '</section>' +
+    stat('Требуют действия', estimate.rows.length - ready.length) + stat('ИТОГО по смете', money(totals.subtotal / 100)) + '</section>' +
     '<section class="panel panel-head workflow-panel" aria-labelledby="workflow-title"><div>' +
     '<h2 id="workflow-title" tabindex="-1">Этап сметы · ' + steps[stage].role + '</h2><p class="note">' + stageText[stage] + '</p></div>' +
     (stage === 3 ? '' : '<button class="btn primary" id="advance-estimate" type="button"' +
@@ -835,11 +875,19 @@ function renderCard(resetEntry = false) {
     '<div id="results"></div>' +
     (stage === 0 ? '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
       '<div id="inline-position-content"></div></section>' : '') + '</section>' +
-    '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
-    '<h2 id="estimate-totals-title">Итог по подтверждённым позициям</h2><dl class="detail">' +
-    '<div><dt>Сумма строк</dt><dd>' + money(subtotal / 100) + '</dd></div>' +
-    '<div><dt>НДС ' + estimateVatRate + '% на работы, механизмы и доставку</dt><dd>' + money(vatCents / 100) + '</dd></div>' +
-    '<div><dt>Итого к оплате</dt><dd>' + money((subtotal + vatCents) / 100) + '</dd></div></dl></section>';
+    renderEstimateTotals(estimate, totals, stage);
+  const vatForm = document.querySelector('#estimate-vat-form');
+  if (vatForm) vatForm.onsubmit = event => {
+    event.preventDefault();
+    const input = vatForm.elements.namedItem('vatRate');
+    const rate = input.valueAsNumber;
+    if (estimate !== activeEstimate || estimateStage(estimate) !== 3 || !Number.isFinite(rate) || rate < 0 || rate > 100) return;
+    estimate.vatRate = rate;
+    const saved = save();
+    renderCard();
+    document.querySelector('#estimate-vat-form input')?.focus();
+    notify(saved ? 'Процент НДС сохранён.' : 'Изменение доступно до обновления страницы.');
+  };
   const draw = () => {
     const tabs = document.querySelector('#categories');
     tabs.innerHTML = [['all', 'Все позиции'], ...categories.map(category => [category, category])].map(([value, label]) => {
