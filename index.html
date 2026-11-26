@@ -526,11 +526,20 @@ function lineAmountCents(volume, unitPrice) {
   return Math.round((amount + Number.EPSILON * amount) * 100);
 }
 
+function estimateLinePrice(row) {
+  if (row.customerPrice != null) return { value: row.customerPrice };
+  if (categoryGroup(row.category) === 'Механизмы' && !row.supplySkipped && row.supplyPrice != null) {
+    return { value: row.supplyPrice, source: 'По цене ОМТС' };
+  }
+  const rate = baseCatalogPrice(row);
+  return rate ? { value: rate.value, source: 'Из справочника' } : { value: null };
+}
+
 function estimateTotals(estimate) {
   const amounts = { 'Работы': 0, 'Материалы': 0, 'Механизмы': 0, 'Прочее': 0 };
   let missing = 0;
   for (const row of estimate.rows) {
-    const amount = lineAmountCents(row.volume, row.customerPrice ?? baseCatalogPrice(row)?.value);
+    const amount = lineAmountCents(row.volume, estimateLinePrice(row).value);
     if (amount == null) {
       missing++;
       continue;
@@ -943,8 +952,7 @@ function renderCard(resetEntry = false) {
     }
     const renderRow = row => {
       const step = steps[nextStep(row, stage)];
-      const basePrice = baseCatalogPrice(row);
-      const unitPrice = row.customerPrice ?? basePrice?.value;
+      const { value: unitPrice, source: previewSource } = estimateLinePrice(row);
       const amountCents = lineAmountCents(row.volume, unitPrice);
       const controls = '<div class="row-controls">' +
         (stage === 0 ? '<button type="button" class="btn" data-edit-line="' + esc(row.id) +
@@ -957,7 +965,7 @@ function renderCard(resetEntry = false) {
         controls + '</td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
         '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
         (unitPrice == null ? '<span class="pill wait">Без цены</span>' : money(unitPrice)) +
-        (row.customerPrice == null && basePrice ? '<span class="secondary">Из справочника</span>' : '') +
+        (previewSource ? '<span class="secondary">' + previewSource + '</span>' : '') +
         '</td><td class="num">' + money(amountCents == null ? null : amountCents / 100) +
         (amountCents != null && step ? '<span class="secondary">Предварительно</span>' : '') +
         '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
@@ -995,7 +1003,7 @@ function renderCard(resetEntry = false) {
         rows.push(renderHeader(key, entry.child.name, true), ...matching.map(renderRow));
       }
       if (!section) continue;
-      const amounts = allRows.map(row => lineAmountCents(row.volume, row.customerPrice ?? baseCatalogPrice(row)?.value));
+      const amounts = allRows.map(row => lineAmountCents(row.volume, estimateLinePrice(row).value));
       const subtotal = amounts.reduce((sum, amount) => sum + (amount ?? 0), 0);
       const withoutPrice = amounts.filter(amount => amount == null).length;
       const preview = allRows.some(row => row.customerPrice == null);
@@ -1006,7 +1014,7 @@ function renderCard(resetEntry = false) {
         (allRows.some(row => !visibleIds.has(row.id)) ? '<span class="secondary">Весь раздел</span>' : '') + '</td></tr>');
     }
     const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Создайте раздел и добавьте первую расценку.';
-    document.querySelector('#results').innerHTML = table(['№', 'Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
+    document.querySelector('#results').innerHTML = table(['№', 'Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена для расчёта / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
       '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimate.rows.length + '</div>';
   };
   document.querySelector('#categories').onclick = event => {
