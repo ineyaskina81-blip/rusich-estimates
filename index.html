@@ -519,8 +519,9 @@ function estimateTotals(estimate) {
       missing++;
       continue;
     }
-    const category = Object.hasOwn(amounts, row.category) ? row.category : 'Прочее';
-    amounts[category] += amount;
+    const category = row.category === 'Доставка' ? 'Механизмы' : row.category;
+    const bucket = Object.hasOwn(amounts, category) ? category : 'Прочее';
+    amounts[bucket] += amount;
   }
   const subtotal = Object.values(amounts).reduce((sum, amount) => sum + amount, 0);
   const rate = estimate.vatRate;
@@ -538,11 +539,11 @@ function renderEstimateTotals(estimate, totals, stage) {
     '<h2 id="estimate-totals-title">Итоги сметы</h2><dl class="detail">' +
     line('Всего работы', amounts['Работы']) +
     line('Всего материалы', amounts['Материалы']) +
-    line('Всего машины и механизмы', amounts['Механизмы']) +
+    line('Всего машины, механизмы и доставка', amounts['Механизмы']) +
     line('Всего прочее', amounts['Прочее']) +
     line('ИТОГО по смете', subtotal) + line(vatLabel, vat) +
     line('ИТОГО с НДС', total) + '</dl>' +
-    '<p class="note">НДС начисляется на работы и прочее. Отдельные строки доставки входят в «Прочее».</p>' +
+    '<p class="note">НДС начисляется на работы и прочее.</p>' +
     (stage === 3 ? '<form class="vat-form" id="estimate-vat-form">' +
       '<label>НДС, %<input name="vatRate" type="number" min="0" max="100" step="0.01" required value="' +
       esc(estimate.vatRate ?? '') + '"></label><button class="btn" type="submit">Сохранить НДС</button></form>' : '') +
