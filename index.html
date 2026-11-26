@@ -77,6 +77,11 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .inline-position .action{margin:0;padding:0;border-top:0}
 .inline-position .action .fields{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
 .inline-position .catalog-fields .fields{grid-template-columns:minmax(0,1fr)}
+.volume-links{margin:10px 0}
+.volume-links summary{cursor:pointer;color:var(--brand-dark);font-weight:650}
+.volume-link-options{display:grid;gap:4px;max-height:13rem;overflow:auto;margin:8px 0}
+.volume-links .volume-link-option{display:flex;align-items:baseline;gap:8px;padding:3px 0}
+.volume-link-option input{width:auto;min-height:0;flex:none}
 #inline-structure:empty{display:none}
 .position-structure{margin:16px 0 0}
 .position-structure .fields{margin-bottom:8px}
@@ -1285,9 +1290,8 @@ function renderCard(resetEntry = false) {
     structure.innerHTML = estimate.sections?.length ? structureField(selected ?? entryStructure) : '';
     const references = previousEntry.querySelector('[data-volume-reference]');
     if (references) {
-      const selectedReference = references.value;
-      references.innerHTML = '<option value="">Выберите позицию</option>' + volumeReferenceOptions(estimate, editingLine);
-      references.value = estimate.rows.some(row => row.id === selectedReference) ? selectedReference : '';
+      const checked = new Set([...references.querySelectorAll('input:checked')].map(input => input.value));
+      references.innerHTML = volumeReferenceOptions(estimate, editingLine, checked);
       references.onchange?.();
     }
   } else {
@@ -1415,10 +1419,13 @@ function positionPicker() {
     '<p class="note" id="catalog-matches" role="status"></p></fieldset>';
 }
 
-function volumeReferenceOptions(estimate, row) {
-  return orderedGroups(estimate).flatMap(groupRows).map((item, position) =>
-    item.id === row?.id ? '' : '<option value="' + esc(item.id) + '">№ ' + (position + 1) + ' · ' +
-      esc(item.name) + ' · ' + quantity(item.volume) + ' ' + esc(item.unit) + '</option>').join('');
+function volumeReferenceOptions(estimate, row, checked = new Set()) {
+  return orderedGroups(estimate).flatMap(groupRows).map((item, position) => ({ item, number: position + 1 }))
+    .filter(({ item }) => item.id !== row?.id)
+    .sort((a, b) => Number(b.item.category === 'Работы') - Number(a.item.category === 'Работы'))
+    .map(({ item, number }) => '<label class="volume-link-option"><input type="checkbox" value="' + esc(item.id) +
+      '"' + (checked.has(item.id) ? ' checked' : '') + '> <span>№ ' + number + ' · ' + esc(item.name) + ' · ' +
+      quantity(item.volume) + ' ' + esc(item.unit) + ' · ' + esc(categoryLabel(item.category)) + '</span></label>').join('');
 }
 
 function stepForm(index, row, prices) {
@@ -1464,9 +1471,9 @@ function stepForm(index, row, prices) {
     (index === 0 ? '<div id="inline-structure">' +
       (activeEstimate.sections?.length ? structureField(row?.structure ?? entryStructure) : '') + '</div>' : '') + '</div>' +
     '<p class="note" id="' + (index === 0 ? 'entry-number-help' : 'step-number-help') + '">Введите число или формулу, например =12,5*3.</p>' +
-    (referenceOptions ? '<div class="toolbar"><label>Связать объём с позицией<select data-volume-reference>' +
-      '<option value="">Выберите позицию</option>' + referenceOptions + '</select></label>' +
-      '<button class="btn" data-insert-volume-reference type="button" disabled>Вставить ссылку в объём</button></div>' : '') +
+    (referenceOptions ? '<details class="volume-links"><summary>Связать объём с позициями</summary>' +
+      '<div class="volume-link-options" data-volume-reference>' + referenceOptions + '</div>' +
+      '<button class="btn" data-insert-volume-reference type="button" disabled>Вставить сумму объёмов</button></details>' : '') +
     (index === 0 ? '<div id="base-rate"></div><p class="note" id="base-rate-error" role="alert"></p>' : '') +
     '<button class="btn primary" type="submit">' + (index === 0 ? (row ? 'Сохранить изменения' : 'Добавить расценку') : steps[index].action) + '</button>' +
     (index === 0 && row ? '<button class="btn" type="button" id="cancel-line-edit">Отменить редактирование</button>' : '') + '</form>';
@@ -1572,20 +1579,20 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
   priceField.value = displayNumber(priceKey, index === 2 ? row.supplyPrice ?? row.formulas?.draftPrice ?? omtsCatalogRate(row)?.value :
     index === 3 ? row.formulas?.[estimateLinePrice(row).field] ?? estimateLinePrice(row).value : row?.draftPrice);
   for (const input of [volumeField, priceField]) input.oninput = () => input.setCustomValidity('');
-  const referenceSelect = form.querySelector('[data-volume-reference]');
+  const referenceList = form.querySelector('[data-volume-reference]');
   const insertReference = form.querySelector('[data-insert-volume-reference]');
-  if (referenceSelect && insertReference) {
-    referenceSelect.onchange = () => { insertReference.disabled = !referenceSelect.value; };
+  if (referenceList && insertReference) {
+    referenceList.onchange = () => { insertReference.disabled = !referenceList.querySelector('input:checked'); };
     insertReference.onclick = () => {
-      if (!referenceSelect.value) return;
-      const reference = '@' + referenceSelect.value;
-      if (String(volumeField.value).startsWith('=')) {
-        const start = Math.max(1, volumeField.selectionStart ?? volumeField.value.length);
-        const end = Math.max(start, volumeField.selectionEnd ?? start);
-        volumeField.setRangeText(reference, start, end, 'end');
-      } else {
-        volumeField.value = '=' + reference;
-      }
+      const checked = [...referenceList.querySelectorAll('input:checked')];
+      if (!checked.length) return;
+      const sum = checked.map(input => '@' + input.value).join('+');
+      const group = checked.length > 1 ? '(' + sum + ')' : sum;
+      const current = String(volumeField.value).trim();
+      const prefix = current.startsWith('=') ? current + (/[=+*/(-]$/.test(current) ? '' : '+') : '=';
+      volumeField.value = prefix + group;
+      for (const input of checked) input.checked = false;
+      referenceList.onchange();
       volumeField.setCustomValidity('');
       volumeField.focus();
     };
