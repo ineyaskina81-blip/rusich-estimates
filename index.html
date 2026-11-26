@@ -750,6 +750,40 @@ function deleteEstimateSection(key) {
     (saved ? '' : ' Изменение доступно до обновления страницы.'));
 }
 
+function organizeWorksAndMaterials(estimate) {
+  const sections = estimate.sections ??= [];
+  const types = ['Работы', 'Материалы'];
+  let nextId = sections.reduce((max, section) => Math.max(max, Number(section.id)), 0) + 1;
+  const byType = new Map(types.map(type => {
+    const current = sections.find(section => sectionName(section.name).toLocaleLowerCase('ru') === type.toLocaleLowerCase('ru'));
+    return [type, current ?? { id: String(nextId++), name: type, children: [] }];
+  }));
+  const destinations = [...byType.values()];
+  const changes = orderedGroups(estimate).flatMap(group =>
+    group.entries.flatMap(entry => entry.row ? [entry.row] : entry.rows)
+  ).filter(row => {
+    const destination = byType.get(row.category);
+    return destination && (row.structure || '').split('/')[0] !== destination.id;
+  });
+  estimate.sections = [...destinations, ...sections.filter(section => !destinations.includes(section))];
+  if (destinations.some(section => section.id === estimate.unassignedBefore)) {
+    estimate.unassignedBefore = estimate.sections[2]?.id ?? '';
+  }
+  const moved = new Set(changes);
+  estimate.rows = estimate.rows.filter(row => !moved.has(row));
+  for (const row of changes) {
+    row.structure = byType.get(row.category).id;
+    insertEstimateLine(estimate, row);
+  }
+  sectionFilter = '';
+  cardFilters = { query: '', category: 'all', role: 'all' };
+  const saved = save();
+  renderCard();
+  document.querySelector('#organize-estimate')?.focus();
+  notify('Работы и материалы разложены по разделам. Перенесено строк: ' + changes.length +
+    (saved ? '.' : '. Изменение доступно до обновления страницы.'));
+}
+
 function moveVisibleEstimateLines(estimate, rows, destination) {
   if (!sectionLabel(estimate, destination)) return;
   const moving = rows.filter(row => row.structure !== destination);
@@ -819,6 +853,8 @@ function renderCard(resetEntry = false) {
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
     '<div class="group-controls"><button class="btn" id="add-estimate-section" type="button">+ Раздел</button>' +
+    (estimate.rows.some(row => row.category === 'Работы' || row.category === 'Материалы') ?
+      '<button class="btn" id="organize-estimate" type="button">Разложить работы и материалы</button>' : '') +
     (estimate.sections?.length ? '<button class="btn" id="add-estimate-subsection" type="button">+ Подраздел</button>' : '') +
     (estimate.rows.length || estimate.sections?.length ? '<button class="btn" id="insert-first-section" type="button">Вставить раздел в начало</button>' : '') +
     '</div></div>' +
@@ -954,6 +990,8 @@ function renderCard(resetEntry = false) {
   };
   const advanceButton = document.querySelector('#advance-estimate');
   if (advanceButton) advanceButton.onclick = () => advanceEstimate(estimate);
+  const organizeButton = document.querySelector('#organize-estimate');
+  if (organizeButton) organizeButton.onclick = () => organizeWorksAndMaterials(estimate);
   const addSectionButton = document.querySelector('#add-estimate-section');
   if (addSectionButton) addSectionButton.onclick = () => showSectionForm();
   const insertFirstSection = document.querySelector('#insert-first-section');
