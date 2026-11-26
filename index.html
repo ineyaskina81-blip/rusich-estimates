@@ -257,7 +257,9 @@ const priceCatalog = (() => {
       });
     }
     for (const row of await sheet('История', 'Код цены')) {
-      add(row['Код позиции'], row, 'history', row['Цена, руб.'], iso(row['Дата по источнику']));
+      const price = row['Категория'] === 'Материалы' && typeof row['Цена для сметы, руб.'] === 'number'
+        ? row['Цена для сметы, руб.'] : row['Цена, руб.'];
+      add(row['Код позиции'], row, 'history', price, iso(row['Дата по источнику']));
     }
     for (const [name, kind, counterparty] of [
       ['Закупка ОМТС', 'supply', 'Поставщик'], ['Для заказчика', 'customer', 'Заказчик или объект']
@@ -1003,7 +1005,8 @@ function priceOption(price) {
 function positionPriceLabel(position) {
   const purchase = position.category === 'Механизмы' ? pricesForPosition(position, 2)[0] : null;
   const price = purchase ?? pricesForPosition(position, 3)[0];
-  return price ? money(price.value) + '/' + position.unit + ' · ' + previewPriceKinds[price.kind] : 'Цена отсутствует';
+  return price ? money(price.value) + '/' + position.unit + ' · ' + previewPriceKinds[price.kind] +
+    (price.vat === 'С НДС' ? ' · с НДС' : '') : 'Цена отсутствует';
 }
 
 function pricePicker(prices) {
