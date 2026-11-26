@@ -369,6 +369,7 @@ let cardFilters = { query: '', category: 'all', role: 'all' };
 let activeEstimate;
 let sectionFilter = '';
 let entryStructure = '';
+let entryPlacement = null;
 let sectionInsertion = null;
 let editingLine = null;
 let drawerReturn;
@@ -656,11 +657,22 @@ function insertEstimateGroup(estimate, parent, item, insertion) {
   sections.splice(sections.indexOf(oldSection) + 1, 0, item);
 }
 
-function appendDirectRow(estimate, structure, rowId) {
+function appendDirectRow(estimate, structure, rowId, placement) {
   const section = estimate.sections?.find(item => item.id === structure);
   if (!section) return;
   const key = 'r:' + rowId;
-  section.layout = [...sectionEntries(estimate, section).map(entry => entry.key).filter(id => id !== key), key];
+  const layout = sectionEntries(estimate, section).map(entry => entry.key).filter(id => id !== key);
+  const after = layout.indexOf('r:' + placement?.afterId);
+  layout.splice(placement?.atStart ? 0 : after < 0 ? layout.length : after + 1, 0, key);
+  section.layout = layout;
+}
+
+function insertEstimateLine(estimate, row, placement) {
+  appendDirectRow(estimate, row.structure, row.id, placement);
+  const sameGroup = item => (item.structure || '') === row.structure;
+  const index = placement?.atStart ? estimate.rows.findIndex(sameGroup) :
+    estimate.rows.findIndex(item => item.id === placement?.afterId && sameGroup(item));
+  estimate.rows.splice(index < 0 ? estimate.rows.length : index + (placement?.atStart ? 0 : 1), 0, row);
 }
 
 function showSectionForm(parentId = '', insertion = null) {
@@ -726,6 +738,30 @@ function deleteEstimateSection(key) {
     (saved ? '' : ' Изменение доступно до обновления страницы.'));
 }
 
+function moveVisibleEstimateLines(estimate, rows, destination) {
+  if (!sectionLabel(estimate, destination)) return;
+  const moving = rows.filter(row => row.structure !== destination);
+  if (!moving.length) {
+    notify('Показанные позиции уже в выбранном разделе.');
+    return;
+  }
+  if (!window.confirm('Перенести показанные позиции (' + moving.length + ') в «' +
+    sectionLabel(estimate, destination) + '»?')) return;
+  const moved = new Set(moving);
+  estimate.rows = estimate.rows.filter(row => !moved.has(row));
+  for (const row of moving) {
+    row.structure = destination;
+    insertEstimateLine(estimate, row);
+  }
+  sectionFilter = destination;
+  estimate.lastEntryStructure = destination;
+  const saved = save();
+  editingLine = null;
+  renderCard(true);
+  setEntryStructure(destination, false);
+  notify('Перенесено позиций: ' + moving.length + (saved ? '.' : '. Изменение доступно до обновления страницы.'));
+}
+
 function deleteEstimateLine(row) {
   if (!row || estimateStage(activeEstimate) !== 0 ||
     !window.confirm('Удалить строку «' + row.name + '» из сметы?')) return;
@@ -779,7 +815,12 @@ function renderCard(resetEntry = false) {
     filterSelect('role', 'Ответственный за следующий шаг', 'Все ответственные', [...steps.map(step => step.role), 'Готово'], cardFilters.role) +
     (estimate.sections?.length ? '<select id="section-filter" aria-label="Раздел или подраздел сметы">' +
       sectionOptions('Все разделы', sectionFilter) + '</select>' : '') +
-    '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div><div id="results"></div>' +
+    '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div>' +
+    (estimate.sections?.length && estimate.rows.length ?
+      '<div class="toolbar"><select id="bulk-destination" aria-label="Куда перенести показанные позиции">' +
+      sectionOptions('Выберите раздел для переноса') + '</select>' +
+      '<button type="button" class="btn" id="move-visible" disabled>Перенести показанные строки</button></div>' : '') +
+    '<div id="results"></div>' +
     (stage === 0 ? '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
       '<div id="inline-position-content"></div></section>' : '') + '</section>' +
     '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
@@ -805,6 +846,14 @@ function renderCard(resetEntry = false) {
     const groupRows = group => group.entries.flatMap(entry => entry.row ? [entry.row] : entry.rows);
     const positionNumbers = new Map(groups.flatMap(groupRows).map((row, index) => [row.id, index + 1]));
     const visibleIds = new Set(visible.map(row => row.id));
+    const move = document.querySelector('#move-visible');
+    if (move) {
+      const destination = document.querySelector('#bulk-destination');
+      destination.onchange = () => { move.disabled = !destination.value || !visibleIds.size; };
+      destination.onchange();
+      move.onclick = () => moveVisibleEstimateLines(estimate,
+        groups.flatMap(groupRows).filter(row => visibleIds.has(row.id)), destination.value);
+    }
     const renderRow = row => {
       const step = steps[nextStep(row)];
       const basePrice = baseCatalogPrice(row);
@@ -812,7 +861,8 @@ function renderCard(resetEntry = false) {
       const amountCents = lineAmountCents(row.volume, unitPrice);
       const controls = '<div class="row-controls">' +
         (stage === 0 ? '<button type="button" class="btn" data-edit-line="' + esc(row.id) +
-          '">Изменить</button><button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить</button>' : '') +
+          '">Изменить</button><button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить</button>' +
+          '<button type="button" class="btn" data-add-after-line="' + esc(row.id) + '">Добавить расценку после</button>' : '') +
         '<button type="button" class="btn" data-insert-after-line="' + esc(row.id) + '">Вставить после</button></div>';
       return '<tr><td class="num">' + positionNumbers.get(row.id) +
         '</td><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
@@ -830,7 +880,7 @@ function renderCard(resetEntry = false) {
     const showEmptyGroups = !cardFilters.query.trim() && cardFilters.role === 'all' && cardFilters.category === 'all';
     function renderHeader(key, name, child) {
       const controls = key ? '<div class="group-controls">' +
-        (stage === 0 ? '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить сюда</button>' : '') +
+        (stage === 0 ? '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить в начало</button>' : '') +
         (child ? '<button class="btn" type="button" data-section-after="' + esc(key) + '">Вставить после подраздела</button>' :
           '<button class="btn" type="button" data-child-section="' + esc(key) + '">+ Подраздел</button>' +
           '<button class="btn" type="button" data-first-child="' + esc(key) + '">Подраздел в начало</button>') +
@@ -902,7 +952,7 @@ function renderCard(resetEntry = false) {
   document.querySelector('#results').onclick = event => {
     const button = event.target.closest('button');
     if (!button) return;
-    const { childSection, firstChild, entrySection, deleteSection, editLine, deleteLine, row, insertAfterLine, sectionAfter } = button.dataset;
+    const { childSection, firstChild, entrySection, deleteSection, editLine, deleteLine, row, insertAfterLine, sectionAfter, addAfterLine } = button.dataset;
     if (firstChild) showSectionForm(firstChild, { sectionId: firstChild, edge: 'start' });
     else if (insertAfterLine) {
       const anchor = estimate.rows.find(item => item.id === insertAfterLine);
@@ -910,12 +960,16 @@ function renderCard(resetEntry = false) {
     } else if (sectionAfter) showSectionForm('', { sectionId: sectionAfter, edge: 'end' });
     else if (childSection) showSectionForm(childSection);
     else if (deleteSection) deleteEstimateSection(deleteSection);
-    else if (entrySection) {
+    else if (addAfterLine || entrySection) {
+      const anchor = estimate.rows.find(item => item.id === addAfterLine);
+      if (addAfterLine && !anchor) return;
+      const structure = anchor ? (sectionLabel(estimate, anchor.structure) ? anchor.structure : '') : entrySection;
+      const placement = anchor ? { afterId: anchor.id } : { atStart: true };
       if (editingLine) {
         editingLine = null;
         renderInlineEntry();
       }
-      setEntryStructure(entrySection);
+      setEntryStructure(structure, true, placement);
     }
     else if (editLine) {
       editingLine = estimate.rows.find(item => item.id === editLine);
@@ -937,13 +991,19 @@ function renderCard(resetEntry = false) {
   }
 }
 
-function setEntryStructure(key, focus = true) {
+function setEntryStructure(key, focus = true, placement = null) {
   entryStructure = key;
+  entryPlacement = placement;
   const entry = document.querySelector('#inline-position-content');
   const target = entry?.querySelector('[name="structure"]');
   if (target && !editingLine) target.value = key;
   const label = entry?.querySelector('#entry-target');
-  if (label) label.textContent = sectionLabel(activeEstimate, editingLine?.structure ?? key);
+  if (label) {
+    const section = sectionLabel(activeEstimate, editingLine?.structure ?? key) || 'Без раздела';
+    const anchor = activeEstimate.rows.find(row => row.id === placement?.afterId);
+    const suffix = editingLine ? '' : anchor ? ' · после «' + anchor.name + '»' : placement?.atStart ? ' · в начало' : '';
+    label.textContent = 'Куда добавляем: ' + section + suffix;
+  }
   if (focus) focusInlineEntry();
 }
 
@@ -953,13 +1013,16 @@ function renderInlineEntry() {
   entry.dataset.estimateId = activeEstimate.id;
   entry.innerHTML = stepForm(0, editingLine);
   bindPositionForm(entry, 0, editingLine);
-  setEntryStructure(entryStructure, false);
+  setEntryStructure(entryStructure, false, entryPlacement);
   entry.onchange = event => {
     if (event.target.name !== 'structure') return;
     const key = event.target.value;
-    if (!editingLine) entryStructure = key;
-    const label = entry.querySelector('#entry-target');
-    if (label) label.textContent = sectionLabel(activeEstimate, key);
+    if (!editingLine) {
+      setEntryStructure(key, false);
+    } else {
+      const label = entry.querySelector('#entry-target');
+      if (label) label.textContent = sectionLabel(activeEstimate, key) || 'Без раздела';
+    }
   };
   const cancel = entry.querySelector('#cancel-line-edit');
   if (cancel) cancel.onclick = () => {
@@ -1385,10 +1448,22 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       if (price) row.basePrice = { ...price };
       if (matchesCatalog) row.catalogCode = position.code;
       row.structure = fields.get('structure') || '';
-      if (!originalRow || originalRow.structure !== row.structure) appendDirectRow(activeEstimate, row.structure, row.id);
-      if (originalRow) activeEstimate.rows[activeEstimate.rows.indexOf(originalRow)] = row;
-      else activeEstimate.rows.push(row);
+      if (!originalRow && !row.structure && activeEstimate.sections?.length && !entryPlacement?.afterId) {
+        baseRateError.textContent = 'Выберите раздел или подраздел для новой расценки.';
+        form.elements.namedItem('structure').focus();
+        return;
+      }
+      if (originalRow) {
+        if (originalRow.structure !== row.structure) appendDirectRow(activeEstimate, row.structure, row.id);
+        activeEstimate.rows[activeEstimate.rows.indexOf(originalRow)] = row;
+        entryPlacement = null;
+      } else {
+        const placement = entryStructure === row.structure ? entryPlacement : null;
+        insertEstimateLine(activeEstimate, row, placement);
+        entryPlacement = placement ? { afterId: row.id } : null;
+      }
       entryStructure = row.structure;
+      activeEstimate.lastEntryStructure = row.structure;
       editingLine = null;
       if (sectionFilter && row.structure !== sectionFilter && !row.structure.startsWith(sectionFilter + '/')) {
         sectionFilter = row.structure;
@@ -1514,12 +1589,13 @@ sectionForm.onsubmit = event => {
   if (!parent) item.children = [];
   insertEstimateGroup(activeEstimate, parent, item, sectionInsertion);
   sectionInsertion = null;
+  const key = parent ? parent.id + '/' + item.id : item.id;
+  activeEstimate.lastEntryStructure = key;
   const saved = save();
   sectionDialog.close();
   sectionFilter = '';
   cardFilters = { query: '', category: 'all', role: 'all' };
   renderCard();
-  const key = parent ? parent.id + '/' + item.id : item.id;
   const enteringPositions = estimateStage(activeEstimate) === 0;
   setEntryStructure(key, enteringPositions);
   if (!enteringPositions) document.querySelector('#add-estimate-section')?.focus();
@@ -1537,7 +1613,9 @@ function renderScreen(focusHeading = false) {
   if (estimate !== activeEstimate) {
     cardFilters = { query: '', category: 'all', role: 'all' };
     sectionFilter = '';
-    entryStructure = '';
+    entryStructure = sectionLabel(estimate ?? {}, estimate?.lastEntryStructure)
+      ? estimate.lastEntryStructure : estimate?.sections?.at(-1)?.id ?? '';
+    entryPlacement = null;
     editingLine = null;
   }
   activeEstimate = estimate;
