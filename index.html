@@ -434,9 +434,27 @@ function nextEstimateStage(estimate, stage) {
   return stage === 2 && needsEngineering ? 1 : 3;
 }
 
+function omtsCatalogRate(row) {
+  const rate = baseCatalogPrice(row);
+  return Number.isFinite(rate?.value) && rate.value > 0 ? rate : null;
+}
+
+function rowsBlockingHandoff(estimate, stage) {
+  return estimate.rows.filter(row => nextStep(row, stage) === stage && (stage !== 2 || !omtsCatalogRate(row)));
+}
+
 function advanceEstimate(estimate) {
   const stage = estimateStage(estimate);
-  if (stage === 3 || !estimate.rows.length || estimate.rows.some(row => nextStep(row, stage) === stage)) return;
+  if (stage === 3 || !estimate.rows.length || rowsBlockingHandoff(estimate, stage).length) return;
+  if (stage === 2) {
+    for (const row of estimate.rows.filter(item => nextStep(item, stage) === stage)) {
+      const rate = omtsCatalogRate(row);
+      row.supplyPrice = rate.value;
+      row.supplyVat = rate.vat;
+      row.supplyRate = priceOrigin(rate);
+      delete row.supplySkipped;
+    }
+  }
   const next = nextEstimateStage(estimate, stage);
   estimate.workflowStage = next;
   cardFilters = { query: '', category: 'all', role: 'all' };
@@ -866,6 +884,7 @@ function renderCard(resetEntry = false) {
   const previousEntry = document.querySelector('#inline-position-content');
   const stage = estimateStage(estimate);
   const waiting = estimate.rows.filter(row => nextStep(row, stage) === stage).length;
+  const blocking = rowsBlockingHandoff(estimate, stage);
   const stageButton = {
     2: 'Передать смету в ОМТС',
     1: 'Передать смету главному инженеру',
@@ -873,7 +892,8 @@ function renderCard(resetEntry = false) {
   }[nextEstimateStage(estimate, stage)];
   const stageText = {
     0: 'Заполните все позиции и объёмы, затем передайте смету целиком.',
-    2: waiting ? 'Перед передачей сметы подтвердите закупочные цены по оставшимся позициям.' : 'Все закупочные цены подтверждены.',
+    2: blocking.length ? 'Заполните закупочные цены у позиций без цены. При передаче сметы цены из справочника будут приняты автоматически.' :
+      waiting ? 'Если цены из справочника подходят, передайте смету. Они будут приняты как цены ОМТС.' : 'Закупочные цены указаны.',
     1: waiting ? 'Перед передачей сметы подтвердите объёмы по оставшимся позициям.' : 'Все объёмы техники подтверждены.',
     3: waiting ? 'Проверьте цены для заказчика. Осталось: ' + waiting + '.' : 'Все цены для заказчика подтверждены.'
   };
@@ -900,7 +920,8 @@ function renderCard(resetEntry = false) {
     stat('Требуют действия', estimate.rows.length - ready.length) + stat('ИТОГО по смете', money(totals.subtotal / 100)) + '</section>' +
     '<section class="panel panel-head workflow-panel" aria-labelledby="workflow-title"><div>' +
     '<h2 id="workflow-title" tabindex="-1">Этап сметы · ' + steps[stage].role + '</h2><p class="note">' + stageText[stage] + '</p></div>' +
-    (waiting ? '<button class="btn primary" id="show-stage-positions" type="button">Показать позиции к проверке (' + waiting + ')</button>' :
+    (blocking.length ? '<button class="btn primary" id="show-stage-positions" type="button">' +
+      (stage === 2 ? 'Показать позиции без цены' : 'Показать позиции к проверке') + ' (' + blocking.length + ')</button>' :
       stage === 3 ? '' : '<button class="btn primary" id="advance-estimate" type="button"' +
       (!estimate.rows.length ? ' disabled' : '') + '>' + stageButton + '</button>') + '</section>' +
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title" tabindex="-1">Позиции сметы</h2>' +
@@ -941,9 +962,11 @@ function renderCard(resetEntry = false) {
       return '<button type="button" class="tab" data-category="' + value + '" aria-pressed="' +
         (cardFilters.category === value) + '">' + label + ' <small>' + count + '</small></button>';
     }).join('');
+    const blockingIds = new Set(blocking.map(row => row.id));
     const visible = estimate.rows.filter(row => {
       const step = steps[nextStep(row, stage)];
-      return (cardFilters.category === 'all' || cardFilters.category === categoryGroup(row.category)) &&
+      return (!cardFilters.missingOmtsPrice || blockingIds.has(row.id)) &&
+        (cardFilters.category === 'all' || cardFilters.category === categoryGroup(row.category)) &&
         (cardFilters.role === 'all' || cardFilters.role === (step ? step.role : 'Готово')) &&
         (!sectionFilter || row.structure === sectionFilter || row.structure?.startsWith(sectionFilter + '/')) &&
         rowMatches(row, cardFilters.query);
@@ -1035,7 +1058,11 @@ function renderCard(resetEntry = false) {
     [...document.querySelectorAll('[data-category]')].find(tab => tab.dataset.category === cardFilters.category).focus();
   };
   document.querySelector('#query').oninput = event => { cardFilters.query = event.target.value; draw(); };
-  document.querySelector('#role').onchange = event => { cardFilters.role = event.target.value; draw(); };
+  document.querySelector('#role').onchange = event => {
+    cardFilters.role = event.target.value;
+    cardFilters.missingOmtsPrice = false;
+    draw();
+  };
   if (estimate.sections?.length) {
     document.querySelector('#section-filter').onchange = event => { sectionFilter = event.target.value; draw(); };
   }
@@ -1050,7 +1077,7 @@ function renderCard(resetEntry = false) {
   const showStagePositions = document.querySelector('#show-stage-positions');
   if (showStagePositions) showStagePositions.onclick = () => {
     sectionFilter = '';
-    cardFilters = { query: '', category: 'all', role: steps[stage].role };
+    cardFilters = { query: '', category: 'all', role: steps[stage].role, missingOmtsPrice: stage === 2 };
     renderCard();
     document.querySelector('#card-title').focus();
   };
@@ -1381,7 +1408,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
   }
   const priceSelect = surface.querySelector('#catalog-price');
   const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
-  if (index === 2) priceField.value = row.supplyPrice ?? '';
+  if (index === 2) priceField.value = row.supplyPrice ?? omtsCatalogRate(row)?.value ?? '';
   if (index === 3) {
     priceField.value = row.customerPrice ?? basePrice?.value ?? row.supplyPrice ?? '';
     if (directorCanEditVolume(row.category)) form.elements.namedItem('volume').value = row.volume;
@@ -1648,7 +1675,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       if (sectionFilter && row.structure !== sectionFilter && !row.structure.startsWith(sectionFilter + '/')) {
         sectionFilter = row.structure;
       }
-      cardFilters = { ...cardFilters, query: '', role: 'all' };
+      cardFilters = { query: '', category: cardFilters.category, role: 'all' };
     } else {
       const key = ['volume', 'hours', 'supplyPrice', 'customerPrice'][index];
       const previousValue = row[key];
@@ -1657,7 +1684,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         row.volume = hourlyUnit(row.unit) ? row.hours : Number(fields.get('volume'));
         row.volumeChecked = true;
       }
-      const price = chosenPrice();
+      const price = chosenPrice() || (index === 2 ? omtsCatalogRate(row) : null);
       if (index === 2) {
         delete row.supplySkipped;
         if (price?.value === row.supplyPrice) row.supplyVat = price.vat;
@@ -1685,8 +1712,9 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       } else if (editingCustomerPrice) {
         row.customerRate = 'Цена скорректирована коммерческим директором';
       }
-      if (cardFilters.role === steps[index].role && !activeEstimate.rows.some(item => nextStep(item, stage) === stage)) {
+      if (cardFilters.role === steps[index].role && !rowsBlockingHandoff(activeEstimate, stage).length) {
         cardFilters.role = 'all';
+        cardFilters.missingOmtsPrice = false;
       }
     }
     drawerReturn = row.id;
