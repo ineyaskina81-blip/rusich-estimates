@@ -53,6 +53,8 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .subsection-band .btn{color:#13387f}
 .group-controls,.row-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
 .group-controls .btn,.row-controls .btn{min-height:32px;padding:5px 9px}
+.unpriced-row,.unpriced-row:hover{background:#fff4df}
+.unpriced-row td:first-child{border-left:4px solid #c78924}
 .entry-target{margin:0 0 10px;color:var(--muted)}
 .estimate-total-bar{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;margin-bottom:16px;padding:10px 16px;color:var(--brand-dark);background:var(--soft)}
 .estimate-total-bar strong{font-size:19px}
@@ -941,12 +943,12 @@ function renderCard(resetEntry = false) {
           '">Изменить</button><button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить</button>' +
           '<button type="button" class="btn" data-add-after-line="' + esc(row.id) + '">Добавить расценку после</button>' : '') +
         '<button type="button" class="btn" data-insert-after-line="' + esc(row.id) + '">Вставить после</button></div>';
-      return '<tr><td class="num">' + positionNumbers.get(row.id) +
+      return '<tr' + (unitPrice == null ? ' class="unpriced-row"' : '') + '><td class="num">' + positionNumbers.get(row.id) +
         '</td><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
         '</button><span class="secondary">' + esc(categoryLabel(row.category)) + '</span>' +
         controls + '</td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
         '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
-        money(unitPrice) +
+        (unitPrice == null ? '<span class="pill wait">Без цены</span>' : money(unitPrice)) +
         (row.customerPrice == null && basePrice ? '<span class="secondary">Из справочника</span>' : '') +
         '</td><td class="num">' + money(amountCents == null ? null : amountCents / 100) +
         (amountCents != null && step ? '<span class="secondary">Предварительно</span>' : '') +
@@ -1120,6 +1122,7 @@ function focusInlineEntry() {
 
 const priceKinds = { history: 'История', supply: 'Закупка ОМТС', customer: 'Для заказчика' };
 const previewPriceKinds = { ...priceKinds, history: 'Историческая цена' };
+const directorCanEditVolume = category => category === 'Работы' || category === 'Материалы';
 const needsDirectorPrice = item => item?.category === 'Материалы' &&
   String(item.name ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru') === 'расходные материалы';
 const baseCatalogPrice = row => needsDirectorPrice(row) ? null : row?.basePrice ?? row?.baseWorkPrice;
@@ -1179,10 +1182,10 @@ function positionPicker() {
 function stepForm(index, row, prices) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
-    'Выберите позицию и укажите объём. Для работ, материалов, доставки и прочего выберите готовую цену из справочника. Часы работы техники указывает главный инженер.',
+    'Выберите расценку из справочника или введите название работы или материала вручную. Укажите объём. Цену ручной строки внесёт коммерческий директор.',
     'Сверьте объём по проекту и при необходимости скорректируйте его. Укажите общее время работы техники.',
     'Выберите закупочную цену из справочника или введите цену ОМТС.',
-    baseCatalogPrice(row) ? 'Подтвердите цену из справочника или укажите скорректированную цену для заказчика.' :
+    directorCanEditVolume(row?.category) ? 'Проверьте объём и цену за единицу. При необходимости исправьте их.' :
       'Выберите расценку или введите цену для заказчика, затем подтвердите её.'
   ];
   const numericField = (label, name) =>
@@ -1200,7 +1203,8 @@ function stepForm(index, row, prices) {
     () => (hourlyUnit(row.unit) ? '' : numericField('Объём, ' + esc(row.unit), 'volume')) +
       numericField(hourlyUnit(row.unit) ? 'Объём, ' + esc(row.unit) : 'Часы работы, ч', 'hours'),
     () => numericField('Цена ОМТС за единицу с НДС, ₽', 'supplyPrice'),
-    () => numericField(categoryGroup(row.category) === 'Механизмы' ?
+    () => (directorCanEditVolume(row.category) ? numericField('Объём, ' + esc(row.unit), 'volume') : '') +
+      numericField(categoryGroup(row.category) === 'Механизмы' ?
       'Цена заказчику за единицу с НДС, ₽' : 'Цена заказчику за единицу, ₽', 'customerPrice') +
       (row?.supplyPrice != null ? '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>' : '')
   ];
@@ -1257,7 +1261,8 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     (status ? '<p class="handoff" id="drawer-status" role="status">' + esc(status) + '</p>' : '') +
     (canAct && index !== 0 ? stepForm(index, row, prices) :
       '<p class="note">Действие доступно на этапе «' + steps[index].role + '».</p>') +
-    (index === 4 && stage === 3 ? '<button class="btn" id="adjust-customer-price" type="button">Скорректировать цену заказчику</button>' : '') +
+    (index === 4 && stage === 3 ? '<button class="btn" id="adjust-customer-price" type="button">' +
+      (directorCanEditVolume(row.category) ? 'Скорректировать цену и объём' : 'Скорректировать цену заказчику') + '</button>' : '') +
     (row && activeEstimate.sections?.length ?
       '<form class="action position-structure" id="change-structure"><div class="fields">' +
       structureField(row.structure) + '</div><button class="btn" type="submit">Сохранить раздел</button></form>' : '') +
@@ -1318,7 +1323,10 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
   }
   const priceSelect = surface.querySelector('#catalog-price');
   const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
-  if (index === 3) priceField.value = row.customerPrice ?? basePrice?.value ?? row.supplyPrice ?? '';
+  if (index === 3) {
+    priceField.value = row.customerPrice ?? basePrice?.value ?? row.supplyPrice ?? '';
+    if (directorCanEditVolume(row.category)) form.elements.namedItem('volume').value = row.volume;
+  }
   const chosenPrice = () => priceSelect && prices[priceSelect.value];
   if (priceSelect) {
     priceSelect.onchange = () => {
@@ -1354,7 +1362,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     const directorPrice = needsDirectorPrice({
       category, name: form.elements.namedItem('name').value
     });
-    const needsCatalogPrice = category && category !== 'Механизмы' && !directorPrice;
+    const needsCatalogPrice = category && category !== 'Механизмы' && !directorCanEditVolume(category);
     basePrices = position?.category === category ? pricesForPosition(position, 3) : [];
     const originalRate = baseCatalogPrice(originalRow);
     if (originalRate && originalRow.category === category &&
@@ -1366,7 +1374,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       ? '<label>Расценка за единицу<select id="base-price" required>' +
         basePrices.map((price, i) => '<option value="' + i + '"' + (i === selectedPrice ? ' selected' : '') + '>' + esc(priceOption(price)) + '</option>').join('') +
         '</select></label>'
-      : directorPrice ? '<p class="note">Цену укажет коммерческий директор.</p>'
+      : directorPrice || directorCanEditVolume(category) ? '<p class="note">Строку можно добавить без цены. Цену укажет коммерческий директор.</p>'
       : needsCatalogPrice
         ? '<p class="note">' + (position?.category === category ? 'У этой позиции нет доступной цены. Выберите другую позицию.' :
           'Выберите позицию из загруженного справочника.') + '</p>'
@@ -1532,7 +1540,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       const selected = surface.querySelector('#base-price');
       const directorPrice = needsDirectorPrice(row);
       const price = !directorPrice && (matchesCatalog || sameItem) && selected && basePrices[selected.value];
-      if (!price && !sameItem && row.category !== 'Механизмы' && !directorPrice) {
+      if (!price && !sameItem && row.category !== 'Механизмы' && !directorCanEditVolume(row.category)) {
         baseRateError.textContent = 'Выберите позицию и готовую расценку из справочника.';
         (selected || positionQuery || document.querySelector('#load-catalog')).focus();
         return;
@@ -1590,6 +1598,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       const price = chosenPrice();
       if (index === 2) row.supplyVat = price?.value === row.supplyPrice ? price.vat : null;
       if (index === 3) {
+        if (directorCanEditVolume(row.category)) row.volume = Number(fields.get('volume'));
         row.customerVat = basePrice?.vat ?? price?.vat ??
           (row.customerPrice === row.supplyPrice ? row.supplyVat : row.customerVat) ?? null;
       }
