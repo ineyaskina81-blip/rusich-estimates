@@ -47,6 +47,8 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .workflow-panel .note{margin:0}
 .section-band td{background:#1945a8;color:#fff;font-weight:750;border-left:5px solid #123582}
 .subsection-band td{background:#dce8ff;color:#13387f;padding-left:28px;font-weight:700;border-left:5px solid #7b9dde}
+.section-total td{background:#edf3ff;color:#13387f;font-weight:700;border-top:2px solid #b4c9ee}
+.section-total .group-controls{display:inline-flex;margin:0 0 0 8px}
 .section-band .btn{color:#123582;border-color:#d4e2ff}
 .subsection-band .btn{color:#13387f}
 .group-controls,.row-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
@@ -114,6 +116,7 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
       <form class="action" id="estimate-section-form">
         <div class="fields">
           <label>Родительский раздел<select name="parent"></select></label>
+          <p class="note" id="section-insertion-note"></p>
           <label>Название раздела или подраздела<input name="name" maxlength="160" required autocomplete="off" placeholder="Введите название вручную"></label>
         </div>
         <button class="btn primary" type="submit">Добавить</button>
@@ -364,6 +367,7 @@ let cardFilters = { query: '', category: 'all', role: 'all' };
 let activeEstimate;
 let sectionFilter = '';
 let entryStructure = '';
+let sectionInsertion = null;
 let editingLine = null;
 let drawerReturn;
 let toastTimer;
@@ -532,35 +536,157 @@ function structureField(selected = '') {
     sectionOptions('Без раздела', selected) + '</select></label>';
 }
 
-function sectionGroups(estimate) {
-  const groups = new Map();
-  for (const section of estimate.sections ?? []) {
-    groups.set(section.id, { name: section.name, parent: '', rows: [] });
-    for (const child of section.children) {
-      groups.set(section.id + '/' + child.id, { name: child.name, parent: section.id, rows: [] });
-    }
+function sectionEntries(estimate, section) {
+  const direct = estimate.rows.filter(row => row.structure === section.id);
+  const entries = new Map(direct.map(row => ['r:' + row.id, { row }]));
+  for (const child of section.children) {
+    entries.set('s:' + child.id, {
+      child,
+      rows: estimate.rows.filter(row => row.structure === section.id + '/' + child.id)
+    });
   }
-  const unassigned = { name: 'Без раздела', parent: '', rows: [] };
-  for (const row of estimate.rows) (groups.get(row.structure) ?? unassigned).rows.push(row);
-  if (unassigned.rows.length) groups.set('', unassigned);
-  return groups;
+  const ordered = [];
+  for (const key of section.layout ?? []) {
+    const entry = entries.get(key);
+    if (!entry) continue;
+    ordered.push({ key, ...entry });
+    entries.delete(key);
+  }
+  for (const [key, entry] of entries) ordered.push({ key, ...entry });
+  return ordered;
 }
 
-function showSectionForm(parentId = '') {
+function unassignedRows(estimate) {
+  const keys = new Set((estimate.sections ?? []).flatMap(section =>
+    [section.id, ...section.children.map(child => section.id + '/' + child.id)]));
+  return estimate.rows.filter(row => !keys.has(row.structure));
+}
+
+function orderedGroups(estimate) {
+  const sections = (estimate.sections ?? []).map(section => ({
+    section, entries: sectionEntries(estimate, section)
+  }));
+  const unassigned = unassignedRows(estimate);
+  if (unassigned.length) {
+    const before = sections.findIndex(group => group.section.id === estimate.unassignedBefore);
+    sections.splice(before < 0 ? sections.length : before, 0, { entries: unassigned.map(row => ({ row })) });
+  }
+  return sections;
+}
+
+function insertEstimateGroup(estimate, parent, item, insertion) {
+  const sections = estimate.sections;
+  if (!insertion) {
+    if (parent) {
+      parent.layout = [...sectionEntries(estimate, parent).map(entry => entry.key), 's:' + item.id];
+      parent.children.push(item);
+    } else {
+      sections.push(item);
+    }
+    return;
+  }
+  const anchor = estimate.rows.find(row => row.id === insertion.rowId);
+  const [sectionId, childId] = (anchor?.structure ?? insertion.sectionId ?? '').split('/');
+  const oldSection = sections.find(section => section.id === sectionId);
+  if (parent && parent !== oldSection) {
+    parent.layout = [...sectionEntries(estimate, parent).map(entry => entry.key), 's:' + item.id];
+    parent.children.push(item);
+    return;
+  }
+  if (!oldSection) {
+    const position = sections.findIndex(section => section.id === estimate.unassignedBefore);
+    if (!anchor) {
+      if (insertion.edge === 'start') sections.unshift(item);
+      else sections.push(item);
+      return;
+    }
+    const unassigned = unassignedRows(estimate);
+    const split = unassigned.indexOf(anchor) + 1;
+    item.layout = unassigned.slice(split).map(row => {
+      row.structure = item.id;
+      return 'r:' + row.id;
+    });
+    sections.splice(position < 0 ? sections.length : position, 0, item);
+    estimate.unassignedBefore = item.id;
+    return;
+  }
+
+  const entries = sectionEntries(estimate, oldSection);
+  const anchorKey = childId ? 's:' + childId : anchor ? 'r:' + anchor.id : '';
+  const cut = anchorKey ? entries.findIndex(entry => entry.key === anchorKey) + 1 :
+    insertion.edge === 'start' ? 0 : entries.length;
+  const head = entries.slice(0, cut);
+  const tail = entries.slice(cut);
+  let remainder = [];
+  if (anchor && childId) {
+    const childRows = head.at(-1)?.rows ?? [];
+    remainder = childRows.slice(childRows.indexOf(anchor) + 1);
+  }
+  if (parent) {
+    if (!childId) {
+      while (tail[0]?.row) remainder.push(tail.shift().row);
+    }
+    for (const row of remainder) row.structure = parent.id + '/' + item.id;
+    parent.children.push(item);
+    parent.layout = [...head.map(entry => entry.key), 's:' + item.id, ...tail.map(entry => entry.key)];
+    return;
+  }
+
+  if (remainder.length) {
+    const child = head.at(-1).child;
+    item.children.push({ ...child });
+    item.layout = ['s:' + child.id];
+    for (const row of remainder) row.structure = item.id + '/' + child.id;
+  }
+  item.layout ??= [];
+  for (const entry of tail) {
+    item.layout.push(entry.key);
+    if (entry.row) {
+      entry.row.structure = item.id;
+    } else {
+      item.children.push(entry.child);
+      for (const row of entry.rows) row.structure = item.id + '/' + entry.child.id;
+    }
+  }
+  const moved = new Set(tail.filter(entry => entry.child).map(entry => entry.child.id));
+  oldSection.children = oldSection.children.filter(child => !moved.has(child.id));
+  oldSection.layout = head.map(entry => entry.key);
+  sections.splice(sections.indexOf(oldSection) + 1, 0, item);
+}
+
+function appendDirectRow(estimate, structure, rowId) {
+  const section = estimate.sections?.find(item => item.id === structure);
+  if (!section) return;
+  const key = 'r:' + rowId;
+  section.layout = [...sectionEntries(estimate, section).map(entry => entry.key).filter(id => id !== key), key];
+}
+
+function showSectionForm(parentId = '', insertion = null) {
+  sectionInsertion = insertion;
   sectionForm.reset();
   const parent = sectionForm.elements.namedItem('parent');
-  parent.innerHTML = '<option value="">Верхний уровень (раздел)</option>' +
-    (activeEstimate.sections ?? []).map(section =>
+  const anchorStructure = activeEstimate.rows.find(row => row.id === insertion?.rowId)?.structure;
+  const anchorParent = (anchorStructure ?? insertion?.sectionId ?? '').split('/')[0];
+  const sections = (activeEstimate.sections ?? []).filter(section => !insertion || section.id === anchorParent);
+  const onlySubsection = insertion?.edge === 'start' && parentId;
+  const onlySection = !anchorParent || (insertion?.edge === 'end' && anchorParent === insertion.sectionId);
+  parent.innerHTML = (onlySubsection ? '' : '<option value="">Верхний уровень (раздел)</option>') +
+    (insertion && onlySection ? [] : sections).map(section =>
       '<option value="' + esc(section.id) + '">' + esc(section.name) + '</option>').join('');
   parent.value = parentId;
   sectionForm.elements.namedItem('name').setCustomValidity('');
+  const note = document.querySelector('#section-insertion-note');
+  note.textContent = insertion?.rowId
+    ? 'Будет вставлено после выбранной строки. Следующие строки этой группы перейдут под новый заголовок.'
+    : insertion?.edge === 'start' ? 'Будет вставлено перед первой строкой.' :
+      insertion?.edge === 'end' ? 'Будет вставлено после выбранной группы.' : '';
   sectionDialog.showModal();
   sectionForm.elements.namedItem('name').focus();
 }
 
 function deleteEstimateSection(key) {
   const estimate = activeEstimate;
-  if (!estimate || estimateStage(estimate) !== 0) return;
+  if (!estimate) return;
   const [sectionId, childId] = key.split('/');
   const section = estimate.sections?.find(item => item.id === sectionId);
   const target = childId ? section?.children.find(item => item.id === childId) : section;
@@ -573,9 +699,18 @@ function deleteEstimateSection(key) {
     (childId ? 'в раздел «' + section.name + '».' : 'в группу «Без раздела».') : '';
   const childrenNote = !childId && section.children.length ? ' Вместе с подразделами.' : '';
   if (!window.confirm('Удалить ' + kind + ' «' + target.name + '»?' + childrenNote + consequence)) return;
+  const entries = childId ? sectionEntries(estimate, section) : [];
   for (const row of affected) row.structure = destination;
-  if (childId) section.children = section.children.filter(item => item.id !== childId);
-  else estimate.sections = estimate.sections.filter(item => item.id !== sectionId);
+  if (childId) {
+    section.children = section.children.filter(item => item.id !== childId);
+    section.layout = entries.flatMap(entry => entry.key === 's:' + childId
+      ? affected.map(row => 'r:' + row.id) : [entry.key]);
+  } else {
+    if (estimate.unassignedBefore === sectionId || !estimate.unassignedBefore) {
+      estimate.unassignedBefore = estimate.sections[estimate.sections.indexOf(section) + 1]?.id ?? '';
+    }
+    estimate.sections = estimate.sections.filter(item => item.id !== sectionId);
+  }
   if (belongs(sectionFilter)) sectionFilter = destination;
   if (belongs(entryStructure)) entryStructure = destination;
   const entry = document.querySelector('#inline-position-content');
@@ -634,7 +769,9 @@ function renderCard(resetEntry = false) {
     '<section class="panel" aria-labelledby="card-title"><div class="panel-head positions-head"><div><h2 id="card-title">Позиции сметы</h2>' +
     '<p class="note">Нажмите на название позиции, чтобы увидеть маршрут и выполнить следующий шаг.</p></div>' +
     '<div class="group-controls"><button class="btn" id="add-estimate-section" type="button">+ Раздел</button>' +
-    (estimate.sections?.length ? '<button class="btn" id="add-estimate-subsection" type="button">+ Подраздел</button>' : '') + '</div></div>' +
+    (estimate.sections?.length ? '<button class="btn" id="add-estimate-subsection" type="button">+ Подраздел</button>' : '') +
+    (estimate.rows.length || estimate.sections?.length ? '<button class="btn" id="insert-first-section" type="button">Вставить раздел в начало</button>' : '') +
+    '</div></div>' +
     '<div class="tabs" role="group" aria-label="Раздел сметы" id="categories"></div><div class="toolbar">' +
     searchField(cardFilters.query, 'Поиск по названию позиции') +
     filterSelect('role', 'Ответственный за следующий шаг', 'Все ответственные', [...steps.map(step => step.role), 'Готово'], cardFilters.role) +
@@ -662,16 +799,19 @@ function renderCard(resetEntry = false) {
         (!sectionFilter || row.structure === sectionFilter || row.structure?.startsWith(sectionFilter + '/')) &&
         rowMatches(row, cardFilters.query);
     });
-    const groups = sectionGroups(estimate);
-    const positionNumbers = new Map([...groups.values()].flatMap(group => group.rows).map((row, index) => [row.id, index + 1]));
+    const groups = orderedGroups(estimate);
+    const groupRows = group => group.entries.flatMap(entry => entry.row ? [entry.row] : entry.rows);
+    const positionNumbers = new Map(groups.flatMap(groupRows).map((row, index) => [row.id, index + 1]));
     const visibleIds = new Set(visible.map(row => row.id));
     const renderRow = row => {
       const step = steps[nextStep(row)];
       const basePrice = baseCatalogPrice(row);
       const unitPrice = row.customerPrice ?? basePrice?.value;
       const amountCents = lineAmountCents(row.volume, unitPrice);
-      const controls = stage === 0 ? '<div class="row-controls"><button type="button" class="btn" data-edit-line="' + esc(row.id) +
-        '">Изменить</button><button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить</button></div>' : '';
+      const controls = '<div class="row-controls">' +
+        (stage === 0 ? '<button type="button" class="btn" data-edit-line="' + esc(row.id) +
+          '">Изменить</button><button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить</button>' : '') +
+        '<button type="button" class="btn" data-insert-after-line="' + esc(row.id) + '">Вставить после</button></div>';
       return '<tr><td class="num">' + positionNumbers.get(row.id) +
         '</td><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
         '</button><span class="secondary">' + esc(row.category) + '</span>' +
@@ -686,23 +826,45 @@ function renderCard(resetEntry = false) {
     };
     const rows = [];
     const showEmptyGroups = !cardFilters.query.trim() && cardFilters.role === 'all' && cardFilters.category === 'all';
-    for (const [key, group] of groups) {
-      const matchingRows = group.rows.filter(row => visibleIds.has(row.id));
-      const inSection = !sectionFilter || key === sectionFilter || key.startsWith(sectionFilter + '/');
-      const showParent = key && !group.parent && [...groups].some(([childKey, child]) =>
-        child.parent === key && (!sectionFilter || childKey === sectionFilter || key === sectionFilter) &&
-        (showEmptyGroups || child.rows.some(row => visibleIds.has(row.id))));
-      if (!matchingRows.length && !(showEmptyGroups && inSection) && !showParent) continue;
-      if (key || estimate.sections) {
-        const controls = key && (stage === 0 || !group.parent) ? '<div class="group-controls">' +
-          (stage === 0 ? '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить сюда</button>' : '') +
-          (group.parent ? '' : '<button class="btn" type="button" data-child-section="' + esc(key) + '">+ Подраздел</button>') +
-          (stage === 0 ? '<button class="btn" type="button" data-delete-section="' + esc(key) + '">' +
-            (group.parent ? 'Удалить подраздел' : 'Удалить раздел') + '</button>' : '') + '</div>' : '';
-        rows.push('<tr class="' + (group.parent ? 'subsection-band' : 'section-band') +
-          '"><td colspan="9">' + esc(group.name) + controls + '</td></tr>');
+    function renderHeader(key, name, child) {
+      const controls = key ? '<div class="group-controls">' +
+        (stage === 0 ? '<button class="btn" type="button" data-entry-section="' + esc(key) + '">Добавить сюда</button>' : '') +
+        (child ? '<button class="btn" type="button" data-section-after="' + esc(key) + '">Вставить после подраздела</button>' :
+          '<button class="btn" type="button" data-child-section="' + esc(key) + '">+ Подраздел</button>' +
+          '<button class="btn" type="button" data-first-child="' + esc(key) + '">Подраздел в начало</button>') +
+        '<button class="btn" type="button" data-delete-section="' + esc(key) + '">' +
+        (child ? 'Удалить подраздел' : 'Удалить раздел') + '</button></div>' : '';
+      return '<tr class="' + (child ? 'subsection-band' : 'section-band') +
+        '"><td colspan="9">' + esc(name) + controls + '</td></tr>';
+    }
+    for (const group of groups) {
+      const section = group.section;
+      const allRows = groupRows(group);
+      const sectionVisible = allRows.some(row => visibleIds.has(row.id));
+      const sectionMatches = !sectionFilter || sectionFilter === section?.id || sectionFilter.startsWith(section?.id + '/');
+      if (!sectionVisible && !(showEmptyGroups && sectionMatches)) continue;
+      if (section) rows.push(renderHeader(section.id, section.name, false));
+      else if (estimate.sections) rows.push(renderHeader('', 'Без раздела', false));
+      for (const entry of group.entries) {
+        if (entry.row) {
+          if (visibleIds.has(entry.row.id)) rows.push(renderRow(entry.row));
+          continue;
+        }
+        const key = section.id + '/' + entry.child.id;
+        const matching = entry.rows.filter(row => visibleIds.has(row.id));
+        if (!matching.length && !(showEmptyGroups && (!sectionFilter || sectionFilter === section.id || sectionFilter === key))) continue;
+        rows.push(renderHeader(key, entry.child.name, true), ...matching.map(renderRow));
       }
-      rows.push(...matchingRows.map(renderRow));
+      if (!section) continue;
+      const amounts = allRows.map(row => lineAmountCents(row.volume, row.customerPrice ?? baseCatalogPrice(row)?.value));
+      const subtotal = amounts.reduce((sum, amount) => sum + (amount ?? 0), 0);
+      const withoutPrice = amounts.filter(amount => amount == null).length;
+      const preview = allRows.some(row => row.customerPrice == null);
+      rows.push('<tr class="section-total"><td colspan="6">Итого по разделу «' + esc(section.name) + '»' +
+        '<div class="group-controls"><button type="button" class="btn" data-section-after="' + esc(section.id) + '">+ Раздел после</button></div></td>' +
+        '<td class="num">' + money(subtotal / 100) + '</td><td colspan="2">' +
+        (preview ? (withoutPrice ? 'Без цены: ' + withoutPrice + ' · ' : '') + 'Предварительно' : '') +
+        (allRows.some(row => !visibleIds.has(row.id)) ? '<span class="secondary">Весь раздел</span>' : '') + '</td></tr>');
     }
     const emptyMessage = estimate.rows.length ? undefined : 'Смета пуста. Создайте раздел и добавьте первую расценку.';
     document.querySelector('#results').innerHTML = table(['№', 'Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена заказчику / ед.', 'Сумма по строке', 'Чего не хватает', 'Следующий ответственный'], rows, emptyMessage) +
@@ -730,14 +892,21 @@ function renderCard(resetEntry = false) {
   if (advanceButton) advanceButton.onclick = () => advanceEstimate(estimate);
   const addSectionButton = document.querySelector('#add-estimate-section');
   if (addSectionButton) addSectionButton.onclick = () => showSectionForm();
+  const insertFirstSection = document.querySelector('#insert-first-section');
+  if (insertFirstSection) insertFirstSection.onclick = () => showSectionForm('', { edge: 'start' });
   const addSubsectionButton = document.querySelector('#add-estimate-subsection');
   if (addSubsectionButton) addSubsectionButton.onclick = () =>
     showSectionForm((entryStructure || sectionFilter).split('/')[0] || estimate.sections[0].id);
   document.querySelector('#results').onclick = event => {
     const button = event.target.closest('button');
     if (!button) return;
-    const { childSection, entrySection, deleteSection, editLine, deleteLine, row } = button.dataset;
-    if (childSection) showSectionForm(childSection);
+    const { childSection, firstChild, entrySection, deleteSection, editLine, deleteLine, row, insertAfterLine, sectionAfter } = button.dataset;
+    if (firstChild) showSectionForm(firstChild, { sectionId: firstChild, edge: 'start' });
+    else if (insertAfterLine) {
+      const anchor = estimate.rows.find(item => item.id === insertAfterLine);
+      if (anchor) showSectionForm('', { rowId: anchor.id });
+    } else if (sectionAfter) showSectionForm('', { sectionId: sectionAfter, edge: 'end' });
+    else if (childSection) showSectionForm(childSection);
     else if (deleteSection) deleteEstimateSection(deleteSection);
     else if (entrySection) {
       if (editingLine) {
@@ -958,7 +1127,9 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
   if (structureForm) {
     structureForm.onsubmit = event => {
       event.preventDefault();
-      row.structure = new FormData(structureForm).get('structure');
+      const structure = new FormData(structureForm).get('structure');
+      if (structure !== row.structure) appendDirectRow(activeEstimate, structure, row.id);
+      row.structure = structure;
       const saved = save();
       renderCard();
       notify(saved ? 'Раздел позиции сохранён.' : 'Раздел изменён до обновления страницы.');
@@ -1211,6 +1382,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       if (price) row.basePrice = { ...price };
       if (matchesCatalog) row.catalogCode = position.code;
       row.structure = fields.get('structure') || '';
+      if (!originalRow || originalRow.structure !== row.structure) appendDirectRow(activeEstimate, row.structure, row.id);
       if (originalRow) activeEstimate.rows[activeEstimate.rows.indexOf(originalRow)] = row;
       else activeEstimate.rows.push(row);
       entryStructure = row.structure;
@@ -1336,7 +1508,9 @@ sectionForm.onsubmit = event => {
   }
   const nextSectionId = siblings.reduce((max, entry) => Math.max(max, Number(entry.id)), 0) + 1;
   const item = { id: String(nextSectionId), name };
-  siblings.push(parent ? item : { ...item, children: [] });
+  if (!parent) item.children = [];
+  insertEstimateGroup(activeEstimate, parent, item, sectionInsertion);
+  sectionInsertion = null;
   const saved = save();
   sectionDialog.close();
   sectionFilter = '';
@@ -1356,6 +1530,7 @@ function renderScreen(focusHeading = false) {
   if (dialog.open) dialog.close();
   if (newEstimateDialog.open) newEstimateDialog.close();
   if (sectionDialog.open) sectionDialog.close();
+  sectionInsertion = null;
   if (estimate !== activeEstimate) {
     cardFilters = { query: '', category: 'all', role: 'all' };
     sectionFilter = '';
