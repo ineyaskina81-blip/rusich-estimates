@@ -530,7 +530,7 @@ function estimateTotals(estimate) {
   return { amounts, subtotal, vat, total: vat == null ? null : subtotal + vat, missing };
 }
 
-function renderEstimateTotals(estimate, totals, stage) {
+function renderEstimateTotals(estimate, totals) {
   const { amounts, subtotal, vat, total } = totals;
   const showMoney = value => value == null ? '—' : money(value / 100);
   const line = (label, value) => '<div><dt>' + label + '</dt><dd>' + showMoney(value) + '</dd></div>';
@@ -544,9 +544,9 @@ function renderEstimateTotals(estimate, totals, stage) {
     line('ИТОГО по смете', subtotal) + line(vatLabel, vat) +
     line('ИТОГО с НДС', total) + '</dl>' +
     '<p class="note">НДС начисляется на работы и прочее.</p>' +
-    (stage === 3 ? '<form class="vat-form" id="estimate-vat-form">' +
+    '<form class="vat-form" id="estimate-vat-form">' +
       '<label>НДС, %<input name="vatRate" type="number" min="0" max="100" step="0.01" required value="' +
-      esc(estimate.vatRate ?? '') + '"></label><button class="btn" type="submit">Сохранить НДС</button></form>' : '') +
+      esc(estimate.vatRate ?? '') + '"></label><button class="btn" type="submit">Сохранить НДС</button></form>' +
     '</section>';
 }
 
@@ -876,13 +876,13 @@ function renderCard(resetEntry = false) {
     '<div id="results"></div>' +
     (stage === 0 ? '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
       '<div id="inline-position-content"></div></section>' : '') + '</section>' +
-    renderEstimateTotals(estimate, totals, stage);
+    renderEstimateTotals(estimate, totals);
   const vatForm = document.querySelector('#estimate-vat-form');
   if (vatForm) vatForm.onsubmit = event => {
     event.preventDefault();
     const input = vatForm.elements.namedItem('vatRate');
     const rate = input.valueAsNumber;
-    if (estimate !== activeEstimate || estimateStage(estimate) !== 3 || !Number.isFinite(rate) || rate < 0 || rate > 100) return;
+    if (estimate !== activeEstimate || !Number.isFinite(rate) || rate < 0 || rate > 100) return;
     estimate.vatRate = rate;
     const saved = save();
     renderCard();
