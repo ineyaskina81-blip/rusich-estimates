@@ -336,7 +336,7 @@ let catalog = priceCatalog.load();
 const steps = [
   { role: 'ПТО', missing: 'Позиция и объём' },
   { role: 'Главный инженер', missing: 'Проверка объёма техники', action: 'Подтвердить объём' },
-  { role: 'ОМТС', missing: 'Проверка цены техники', action: 'Подтвердить цену ОМТС' },
+  { role: 'ОМТС', missing: 'Проверка закупочной цены', action: 'Подтвердить цену ОМТС' },
   { role: 'Коммерческий директор', missing: 'Подтверждение цены для заказчика', action: 'Подтвердить цену для заказчика' }
 ];
 const workflowOrder = [0, 2, 1, 3];
@@ -410,13 +410,15 @@ function nextEstimateNumber(date) {
   return prefix + String(lastNumber + 1).padStart(3, '0');
 }
 
-function nextStep(row) {
+function needsOmtsPrice(row, stage) {
+  return row.category === 'Механизмы' || (row.category === 'Доставка' && stage !== 1 && stage !== 3);
+}
+
+function nextStep(row, stage) {
   if (!row.name || row.volume == null) return 0;
   if (row.customerPrice != null) return 4;
-  if (row.category === 'Механизмы') {
-    if (row.supplyPrice == null) return 2;
-    if (!row.volumeChecked || row.hours == null) return 1;
-  }
+  if (needsOmtsPrice(row, stage) && row.supplyPrice == null) return 2;
+  if (row.category === 'Механизмы' && (!row.volumeChecked || row.hours == null)) return 1;
   return 3;
 }
 
@@ -424,11 +426,15 @@ function estimateStage(estimate) {
   return estimate.workflowStage ?? (estimateStatus(estimate) === 'Готова' ? 3 : 0);
 }
 
+function nextEstimateStage(estimate, stage) {
+  if (stage === 0 && estimate.rows.some(row => needsOmtsPrice(row, stage))) return 2;
+  return stage === 2 && estimate.rows.some(row => row.category === 'Механизмы') ? 1 : 3;
+}
+
 function advanceEstimate(estimate) {
   const stage = estimateStage(estimate);
-  if (stage === 3 || !estimate.rows.length || estimate.rows.some(row => nextStep(row) === stage)) return;
-  const hasEquipment = estimate.rows.some(row => row.category === 'Механизмы');
-  const next = stage === 0 ? (hasEquipment ? 2 : 3) : stage === 2 ? 1 : 3;
+  if (stage === 3 || !estimate.rows.length || estimate.rows.some(row => nextStep(row, stage) === stage)) return;
+  const next = nextEstimateStage(estimate, stage);
   estimate.workflowStage = next;
   cardFilters = { query: '', category: 'all', role: 'all' };
   sectionFilter = '';
@@ -842,13 +848,15 @@ function renderCard(resetEntry = false) {
   const estimate = activeEstimate;
   const previousEntry = document.querySelector('#inline-position-content');
   const stage = estimateStage(estimate);
-  const waiting = estimate.rows.filter(row => nextStep(row) === stage).length;
-  const hasEquipment = estimate.rows.some(row => row.category === 'Механизмы');
-  const stageButton = stage === 0 ? (hasEquipment ? 'Передать смету в ОМТС' : 'Передать смету коммерческому директору') :
-    stage === 2 ? 'Передать смету главному инженеру' : 'Передать смету коммерческому директору';
+  const waiting = estimate.rows.filter(row => nextStep(row, stage) === stage).length;
+  const stageButton = {
+    2: 'Передать смету в ОМТС',
+    1: 'Передать смету главному инженеру',
+    3: 'Передать смету коммерческому директору'
+  }[nextEstimateStage(estimate, stage)];
   const stageText = {
     0: 'Заполните все позиции и объёмы, затем передайте смету целиком.',
-    2: 'Откройте строки техники и подтвердите закупочные цены. Осталось: ' + waiting + '.',
+    2: 'Откройте строки техники и доставки и подтвердите закупочные цены. Осталось: ' + waiting + '.',
     1: 'Откройте строки техники и подтвердите объёмы. Осталось: ' + waiting + '.',
     3: waiting ? 'Проверьте цены для заказчика. Осталось: ' + waiting + '.' : 'Все цены для заказчика подтверждены.'
   };
@@ -915,7 +923,7 @@ function renderCard(resetEntry = false) {
         (cardFilters.category === value) + '">' + label + ' <small>' + count + '</small></button>';
     }).join('');
     const visible = estimate.rows.filter(row => {
-      const step = steps[nextStep(row)];
+      const step = steps[nextStep(row, stage)];
       return (cardFilters.category === 'all' || cardFilters.category === categoryGroup(row.category)) &&
         (cardFilters.role === 'all' || cardFilters.role === (step ? step.role : 'Готово')) &&
         (!sectionFilter || row.structure === sectionFilter || row.structure?.startsWith(sectionFilter + '/')) &&
@@ -934,7 +942,7 @@ function renderCard(resetEntry = false) {
         groups.flatMap(groupRows).filter(row => visibleIds.has(row.id)), destination.value);
     }
     const renderRow = row => {
-      const step = steps[nextStep(row)];
+      const step = steps[nextStep(row, stage)];
       const basePrice = baseCatalogPrice(row);
       const unitPrice = row.customerPrice ?? basePrice?.value;
       const amountCents = lineAmountCents(row.volume, unitPrice);
@@ -1224,10 +1232,10 @@ function stepForm(index, row, prices) {
 }
 
 function renderDrawer(row, status = '', editingCustomerPrice = false) {
-  const index = editingCustomerPrice ? 3 : nextStep(row);
+  const stage = estimateStage(activeEstimate);
+  const index = editingCustomerPrice ? 3 : nextStep(row, stage);
   const basePrice = baseCatalogPrice(row);
   const prices = index === 2 || (index === 3 && !basePrice) ? availablePrices(row, index) : [];
-  const stage = estimateStage(activeEstimate);
   const canAct = index === stage || index === 4;
   const number = index === 0 ? 'Новая позиция' : 'Позиция сметы № ' + activeEstimate.id;
   const values = row ? [
@@ -1246,7 +1254,7 @@ function renderDrawer(row, status = '', editingCustomerPrice = false) {
     const step = steps[position];
     const nextOrder = index === 4 ? workflowOrder.length : workflowOrder.indexOf(index);
     const skipped = row && ((position === 1 && row.category !== 'Механизмы') ||
-      (position === 2 && row.category !== 'Механизмы'));
+      (position === 2 && !needsOmtsPrice(row, stage) && (row.category !== 'Доставка' || row.supplyPrice == null)));
     return '<li' + (position === index ? ' aria-current="step"' : '') + '><span class="step-icon" aria-hidden="true">' +
       (skipped ? '–' : order < nextOrder ? '✓' : order + 1) + '</span><span>' + step.role + '</span><span class="route-status">' +
       (skipped ? 'Не требуется' : position === index && index === stage ? 'Сейчас' : order < nextOrder ? 'Выполнено' : 'Ожидает') + '</span></li>';
@@ -1624,7 +1632,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     renderCard(index === 0);
     const status = [
       originalRow ? 'Строка изменена.' : 'Расценка добавлена.', 'Объём техники подтверждён.',
-      'Закупочная цена техники подтверждена.', 'Цена для заказчика подтверждена.'
+      'Закупочная цена подтверждена.', 'Цена для заказчика подтверждена.'
     ][index];
     const message = saved ? status : status + ' Изменения сохранены до закрытия страницы.';
     if (index === 0) {
