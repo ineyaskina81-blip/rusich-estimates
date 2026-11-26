@@ -338,7 +338,7 @@ const displayedCategories = categories.filter(category => categoryGroup(category
 let catalog = priceCatalog.load();
 const steps = [
   { role: 'ПТО', missing: 'Позиция и объём' },
-  { role: 'Главный инженер', missing: 'Проверка наименования и объёма', action: 'Сохранить наименование и объём' },
+  { role: 'Главный инженер', missing: 'Проверка наименования и объёма', action: 'Сохранить изменения' },
   { role: 'ОМТС', missing: 'Проверка закупочной цены', action: 'Подтвердить цену ОМТС' },
   { role: 'Коммерческий директор', missing: 'Подтверждение цены для заказчика', action: 'Подтвердить цену для заказчика' }
 ];
@@ -436,7 +436,7 @@ function nextEstimateStage(estimate, stage) {
 }
 
 function omtsCatalogRate(row) {
-  const rate = baseCatalogPrice(row);
+  const rate = row.draftPrice != null ? { value: row.draftPrice, vat: 'С НДС' } : baseCatalogPrice(row);
   return Number.isFinite(rate?.value) && rate.value > 0 ? rate : null;
 }
 
@@ -460,7 +460,8 @@ function advanceEstimate(estimate) {
       const rate = omtsCatalogRate(row);
       row.supplyPrice = rate.value;
       row.supplyVat = rate.vat;
-      row.supplyRate = priceOrigin(rate);
+      row.supplyRate = row.draftPrice != null ? 'Из предварительной цены' : priceOrigin(rate);
+      setEstimateFormula(row, 'supplyPrice', row.formulas?.draftPrice);
       delete row.supplySkipped;
     } else if (stage === 1) {
       if (hourlyUnit(row.unit)) row.hours = row.volume;
@@ -470,6 +471,7 @@ function advanceEstimate(estimate) {
       row.customerPrice = price.value;
       row.customerVat = price.vat ?? null;
       row.customerRate = price.origin;
+      setEstimateFormula(row, 'customerPrice', row.formulas?.[price.field]);
     }
   }
   const next = nextEstimateStage(estimate, stage);
@@ -565,11 +567,69 @@ function lineAmountCents(volume, unitPrice) {
   return Math.round((amount + Number.EPSILON * amount) * 100);
 }
 
+function readEstimateNumber(raw) {
+  const input = raw.trim();
+  const formula = input.startsWith('=');
+  const expression = (formula ? input.slice(1) : input).trim()
+    .replace(/(?<=\d)[ \u00a0\u202f](?=\d{3}(?:\D|$))/g, '').replaceAll(',', '.');
+  const number = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+  if (!formula) return number.test(expression) ? Number(expression) : NaN;
+  const tokens = expression.match(/\d+(?:\.\d*)?|\.\d+|\S/g) ?? [];
+  let index = 0;
+  const take = token => tokens[index] === token && ++index;
+
+  function atom() {
+    if (take('+')) return atom();
+    if (take('-')) return -atom();
+    if (take('(')) {
+      const value = sum();
+      return take(')') ? value : NaN;
+    }
+    const token = tokens[index++];
+    return number.test(token) ? Number(token) : NaN;
+  }
+
+  function product() {
+    let value = atom();
+    while (tokens[index] === '*' || tokens[index] === '/') {
+      const operator = tokens[index++];
+      const operand = atom();
+      value = operator === '*' ? value * operand : value / operand;
+    }
+    return value;
+  }
+
+  function sum() {
+    let value = product();
+    while (tokens[index] === '+' || tokens[index] === '-') {
+      const operator = tokens[index++];
+      const operand = product();
+      value = operator === '+' ? value + operand : value - operand;
+    }
+    return value;
+  }
+
+  const result = sum();
+  return index === tokens.length ? result : NaN;
+}
+
+function setEstimateFormula(row, key, value) {
+  if (value?.startsWith('=')) row.formulas = { ...row.formulas, [key]: value };
+  else if (row.formulas?.[key]) {
+    row.formulas = { ...row.formulas };
+    delete row.formulas[key];
+  }
+}
+
 function estimateLinePrice(row) {
   if (row.customerPrice != null) return { value: row.customerPrice };
-  if (categoryGroup(row.category) === 'Механизмы' && !row.supplySkipped && row.supplyPrice != null) {
-    return { value: row.supplyPrice, source: 'По цене ОМТС', origin: 'По закупочному тарифу ОМТС', vat: row.supplyVat };
+  if (row.engineeringPrice && row.draftPrice != null) {
+    return { value: row.draftPrice, source: 'Предварительная цена', origin: 'Предварительная цена', field: 'draftPrice' };
   }
+  if ((categoryGroup(row.category) === 'Механизмы' || row.supplyEdited) && !row.supplySkipped && row.supplyPrice != null) {
+    return { value: row.supplyPrice, source: 'По цене ОМТС', origin: 'По закупочному тарифу ОМТС', vat: row.supplyVat, field: 'supplyPrice' };
+  }
+  if (row.draftPrice != null) return { value: row.draftPrice, source: 'Предварительная цена', origin: 'Предварительная цена', field: 'draftPrice' };
   const rate = baseCatalogPrice(row);
   return rate ? { value: rate.value, source: 'Из справочника', origin: priceOrigin(rate), vat: rate.vat } : { value: null };
 }
@@ -928,9 +988,9 @@ function renderCard(resetEntry = false) {
   }[nextEstimateStage(estimate, stage)];
   const stageText = {
     0: 'Заполните все позиции и объёмы, затем передайте смету целиком.',
-    2: blocking.length ? 'Заполните закупочные цены у позиций без цены. При передаче сметы цены из справочника будут приняты автоматически.' :
-      waiting ? 'Если цены из справочника подходят, передайте смету. Они будут приняты как цены ОМТС.' : 'Закупочные цены указаны.',
-    1: 'Проверьте наименования и объёмы. Если всё верно, передайте смету коммерческому директору.',
+    2: blocking.length ? 'Заполните недостающие закупочные цены. При передаче сметы имеющиеся цены будут приняты автоматически.' :
+      waiting ? 'Если текущие цены подходят, передайте смету. Они будут приняты как цены ОМТС.' : 'Закупочные цены указаны.',
+    1: 'Проверьте наименования, объёмы и предварительные цены. Если всё верно, передайте смету коммерческому директору.',
     3: blocking.length ? 'Укажите цены в строках без цены.' : waiting ? 'Если текущие цены подходят, завершите смету одним нажатием.' :
       'Все цены для заказчика подтверждены.'
   };
@@ -1305,14 +1365,16 @@ function stepForm(index, row, prices) {
   if (index === 4) return '<div class="action"><h3>Позиция готова</h3><p class="note">Цена для заказчика подтверждена.</p></div>';
   const descriptions = [
     'Выберите расценку из справочника или заполните поле «Название позиции» вручную. Укажите тип позиции, единицу измерения и объём.',
-    'Сверьте наименование и объём по проекту. При необходимости исправьте их.',
-    'Выберите закупочную цену из справочника или введите цену ОМТС.',
-    directorCanEditVolume(row?.category) ? 'Проверьте объём и цену за единицу. При необходимости исправьте их.' :
-      'Выберите расценку или введите цену для заказчика, затем подтвердите её.'
+    'Сверьте наименование, объём и предварительную цену.',
+    'Укажите объём и закупочную цену за единицу.',
+    'Проверьте объём и итоговую цену за единицу для заказчика.'
   ];
-  const numericField = (label, name) =>
-    '<label>' + label + '<input name="' + name + '" type="number" min="0.01" max="100000000" step="' +
-    (name.endsWith('Price') ? 'any' : '0.01') + '" required></label>';
+  const numericField = (label, name, required = true) =>
+    '<label>' + label + '<input name="' + name + '" type="text" maxlength="255" autocomplete="off" ' +
+    'aria-describedby="' + (index === 0 ? 'entry-number-help' : 'step-number-help') + '"' +
+    (required ? ' required' : '') + '></label>';
+  const draftField = () => numericField('Предварительная цена за единицу, ₽', 'draftPrice', false);
+  const volumeField = () => numericField('Объём, ' + esc(row.unit), 'volume');
   const fields = [
     () => '<label>Название позиции<input name="name" required maxlength="500" placeholder="Например, мини-экскаватор"></label>' +
       '<label>Тип позиции<select name="category" required><option value="">Выберите тип</option>' +
@@ -1321,11 +1383,12 @@ function stepForm(index, row, prices) {
       '</select></label><div class="pair"><label>Единица измерения<select name="unit" required>' +
       [...new Set(['м³', 'м²', 'т', 'шт.', 'смена', 'ч', 'маш.-ч', 'рейс', 'компл.', 'м.п.', 'кг',
         ...(catalog?.positions.map(position => position.unit) ?? []), ...(row?.unit ? [row.unit] : [])])].map(unit => '<option>' + esc(unit) + '</option>').join('') +
-      '</select></label>' + numericField('Объём', 'volume') + '</div>',
+      '</select></label>' + numericField('Объём', 'volume') + '</div>' + draftField(),
     () => '<label>Наименование расценки<input name="name" required maxlength="500"></label>' +
-      numericField('Объём, ' + esc(row.unit), 'volume'),
-    () => numericField('Цена ОМТС за единицу с НДС, ₽', 'supplyPrice'),
-    () => (directorCanEditVolume(row.category) ? numericField('Объём, ' + esc(row.unit), 'volume') : '') +
+      volumeField() + draftField(),
+    () => volumeField() + numericField(categoryGroup(row.category) === 'Механизмы' ? 'Цена ОМТС за единицу с НДС, ₽' : 'Цена ОМТС за единицу, ₽',
+      'supplyPrice', needsOmtsPrice(row, 2)),
+    () => volumeField() +
       numericField(categoryGroup(row.category) === 'Механизмы' ?
       'Цена заказчику за единицу с НДС, ₽' : 'Цена заказчику за единицу, ₽', 'customerPrice') +
       (row?.supplyPrice != null ? '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>' : '')
@@ -1339,6 +1402,7 @@ function stepForm(index, row, prices) {
     '<div class="fields">' + fields[index]() +
     (index === 0 ? '<div id="inline-structure">' +
       (activeEstimate.sections?.length ? structureField(row?.structure ?? entryStructure) : '') + '</div>' : '') + '</div>' +
+    '<p class="note" id="' + (index === 0 ? 'entry-number-help' : 'step-number-help') + '">Введите число или формулу, например =12,5*3.</p>' +
     (index === 0 ? '<div id="base-rate"></div><p class="note" id="base-rate-error" role="alert"></p>' : '') +
     '<button class="btn primary" type="submit">' + (index === 0 ? (row ? 'Сохранить изменения' : 'Добавить расценку') : steps[index].action) + '</button>' +
     (index === 0 && row ? '<button class="btn" type="button" id="cancel-line-edit">Отменить редактирование</button>' : '') + '</form>';
@@ -1355,6 +1419,7 @@ function renderDrawer(row, status = '', editingStep) {
     ['Тип позиции', categoryLabel(row.category)], ['Объём', quantity(row.volume) + ' ' + row.unit],
     ...(row.category === 'Механизмы' ? [['Часы механизма', row.hours == null ? '—' : quantity(row.hours) + ' ч']] : []),
     ['Цена ОМТС / ед.', row.supplySkipped ? 'Цена ОМТС не указана' : money(row.supplyPrice)],
+    ...(row.draftPrice != null ? [['Предварительная цена / ед.', money(row.draftPrice)]] : []),
     ...(basePrice ? [
       ['Цена из справочника / ед.', money(basePrice.value)],
       ['Расценка из справочника', priceOrigin(basePrice)]
@@ -1383,11 +1448,11 @@ function renderDrawer(row, status = '', editingStep) {
     (status ? '<p class="handoff" id="drawer-status" role="status">' + esc(status) + '</p>' : '') +
     (canAct && index !== 0 ? stepForm(index, row, prices) :
       '<p class="note">Действие доступно на этапе «' + steps[index].role + '».</p>') +
-    (stage === 1 && index !== 1 ? '<button class="btn" id="adjust-engineering-position" type="button">Изменить наименование и объём</button>' : '') +
-    (stage === 2 && index !== 2 && needsOmtsPrice(row, stage) && row.supplyPrice != null ?
-      '<button class="btn" id="adjust-supply-price" type="button">Скорректировать цену ОМТС</button>' : '') +
+    (stage === 1 && index !== 1 ? '<button class="btn" id="adjust-engineering-position" type="button">Изменить наименование, объём и цену</button>' : '') +
+    (stage === 2 && index !== 2 ?
+      '<button class="btn" id="adjust-supply-price" type="button">Скорректировать цену и объём ОМТС</button>' : '') +
     (index === 4 && stage === 3 ? '<button class="btn" id="adjust-customer-price" type="button">' +
-      (directorCanEditVolume(row.category) ? 'Скорректировать цену и объём' : 'Скорректировать цену заказчику') + '</button>' : '') +
+      'Скорректировать цену и объём</button>' : '') +
     (row && activeEstimate.sections?.length ?
       '<form class="action position-structure" id="change-structure"><div class="fields">' +
       structureField(row.structure) + '</div><button class="btn" type="submit">Сохранить раздел</button></form>' : '') +
@@ -1435,11 +1500,20 @@ function renderDrawer(row, status = '', editingStep) {
 function bindPositionForm(surface, index, row, prices = [], basePrice, editingCustomerPrice = false) {
   const form = surface.querySelector(index === 0 ? '#add-line-form' : '#step-form');
   if (!form) return;
+  const priceKey = index === 2 ? 'supplyPrice' : index === 3 ? 'customerPrice' : 'draftPrice';
+  const priceField = form.elements.namedItem(priceKey);
+  const volumeField = form.elements.namedItem('volume');
+  const displayNumber = (key, fallback) => row?.formulas?.[key] ?? fallback ?? '';
+  volumeField.value = displayNumber('volume', row?.volume);
+  priceField.value = displayNumber(priceKey, index === 2 ? row.supplyPrice ?? row.formulas?.draftPrice ?? omtsCatalogRate(row)?.value :
+    index === 3 ? row.formulas?.[estimateLinePrice(row).field] ?? estimateLinePrice(row).value : row?.draftPrice);
+  for (const input of [volumeField, priceField]) input.oninput = () => input.setCustomValidity('');
   const copyPrice = surface.querySelector('#copy-price');
   if (copyPrice) {
     copyPrice.onclick = () => {
       const field = form.elements.namedItem('customerPrice');
-      field.value = row.supplyPrice;
+      field.value = displayNumber('supplyPrice', row.supplyPrice);
+      field.setCustomValidity('');
       const picker = surface.querySelector('#catalog-price');
       if (picker) picker.value = '';
       field.focus();
@@ -1449,20 +1523,14 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     const name = form.elements.namedItem('name');
     name.value = row.name;
     name.oninput = () => name.setCustomValidity('');
-    form.elements.namedItem('volume').value = row.volume ?? '';
   }
   const priceSelect = surface.querySelector('#catalog-price');
-  const priceField = form.elements.namedItem(index === 2 ? 'supplyPrice' : 'customerPrice');
-  if (index === 2) priceField.value = row.supplyPrice ?? omtsCatalogRate(row)?.value ?? '';
-  if (index === 3) {
-    priceField.value = estimateLinePrice(row).value ?? '';
-    if (directorCanEditVolume(row.category)) form.elements.namedItem('volume').value = row.volume;
-  }
   const chosenPrice = () => priceSelect && prices[priceSelect.value];
   if (priceSelect) {
     priceSelect.onchange = () => {
       const price = chosenPrice();
       priceField.value = price?.value ?? '';
+      priceField.setCustomValidity('');
       surface.querySelector('#catalog-source').textContent = price ? [
         price.counterparty, price.source,
         price.kind === 'history' ? 'Архивная цена. Проверьте применимость к текущей смете.' : ''
@@ -1527,7 +1595,6 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     if (originalRow) {
       form.elements.namedItem('name').value = originalRow.name;
       categorySelect.value = categoryGroup(originalRow.category);
-      form.elements.namedItem('volume').value = originalRow.volume;
       if (positionQuery) positionQuery.value = originalRow.name;
     }
     setUnit();
@@ -1654,6 +1721,18 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
     const stage = estimateStage(activeEstimate);
     if ((index !== 0 || originalRow) && stage !== index) return;
     const fields = new FormData(form);
+    const volumeText = fields.get('volume').trim();
+    const volume = readEstimateNumber(volumeText);
+    const priceText = fields.get(priceKey).trim();
+    const priceRequired = index === 3 || (index === 2 && needsOmtsPrice(row, stage));
+    const amount = !priceText && !priceRequired ? null : readEstimateNumber(priceText);
+    for (const [field, value] of [[volumeField, volume], [priceField, amount]]) {
+      if (value !== null && (!Number.isFinite(value) || value < 0.01 || value > 100000000)) {
+        field.setCustomValidity('Введите число или формулу с результатом от 0,01 до 100 000 000.');
+        field.reportValidity();
+        return;
+      }
+    }
     if (index === 0) {
       const name = fields.get('name').trim();
       if (!name) {
@@ -1664,7 +1743,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       }
       const nextId = activeEstimate.rows.reduce((max, item) => Math.max(max, Number(item.id)), 0) + 1;
       row = makeRow(originalRow?.id ?? String(nextId), name, resolvedCategory(), fields.get('unit'),
-        Number(fields.get('volume')), null, null, null);
+        volume, null, null, null);
       const position = chosenPosition;
       const matchesCatalog = position && position.unit === row.unit && position.category === row.category &&
         (position.name === row.name || position.code === originalRow?.catalogCode);
@@ -1698,6 +1777,13 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         delete row.baseWorkPrice;
       } else if (price) row.basePrice = { ...price };
       if (matchesCatalog) row.catalogCode = position.code;
+      if (amount !== (originalRow?.draftPrice ?? null)) {
+        row.customerPrice = null;
+        setEstimateFormula(row, 'customerPrice', null);
+      }
+      row.draftPrice = amount;
+      setEstimateFormula(row, 'volume', volumeText);
+      setEstimateFormula(row, priceKey, priceText);
       row.structure = fields.get('structure') || '';
       if (!originalRow && !row.structure && activeEstimate.sections?.length && !entryPlacement?.afterId) {
         baseRateError.textContent = 'Выберите раздел или подраздел для новой расценки.';
@@ -1731,15 +1817,33 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         return;
       }
       row.name = name;
-      row.volume = Number(fields.get('volume'));
+      row.volume = volume;
+      if (amount !== (row.draftPrice ?? null) || (priceText.startsWith('=') && priceText !== row.formulas?.draftPrice)) {
+        row.engineeringPrice = amount != null;
+        row.customerPrice = null;
+        setEstimateFormula(row, 'customerPrice', null);
+      }
+      row.draftPrice = amount;
       if (row.category === 'Механизмы' && hourlyUnit(row.unit)) row.hours = row.volume;
       row.volumeChecked = true;
+      setEstimateFormula(row, 'volume', volumeText);
+      setEstimateFormula(row, priceKey, priceText);
     } else {
-      const key = index === 2 ? 'supplyPrice' : 'customerPrice';
+      const key = priceKey;
       const previousValue = row[key];
-      row[key] = Number(fields.get(key));
+      row[key] = amount;
+      row.volume = volume;
+      if (row.category === 'Механизмы' && hourlyUnit(row.unit)) row.hours = volume;
+      setEstimateFormula(row, 'volume', volumeText);
+      setEstimateFormula(row, key, priceText);
       const price = chosenPrice() || (index === 2 ? omtsCatalogRate(row) : null);
       if (index === 2) {
+        row.supplyEdited = amount != null;
+        if (previousValue !== amount) {
+          row.engineeringPrice = false;
+          row.customerPrice = null;
+          setEstimateFormula(row, 'customerPrice', null);
+        }
         delete row.supplySkipped;
         if (price?.value === row.supplyPrice) row.supplyVat = price.vat;
         else if (previousValue !== row.supplyPrice) {
@@ -1748,11 +1852,10 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         }
       }
       if (index === 3) {
-        if (directorCanEditVolume(row.category)) row.volume = Number(fields.get('volume'));
-        row.customerVat = row.customerPrice === row.supplyPrice && categoryGroup(row.category) === 'Механизмы' && !row.supplySkipped
+        row.customerVat = row.customerPrice === row.supplyPrice && (categoryGroup(row.category) === 'Механизмы' || row.supplyEdited) && !row.supplySkipped
           ? row.supplyVat ?? null : basePrice?.vat ?? price?.vat ?? row.customerVat ?? null;
       }
-      if (index === 3 && row.customerPrice === row.supplyPrice && categoryGroup(row.category) === 'Механизмы' && !row.supplySkipped) {
+      if (index === 3 && row.customerPrice === row.supplyPrice && (categoryGroup(row.category) === 'Механизмы' || row.supplyEdited) && !row.supplySkipped) {
         row.customerRate = 'По закупочному тарифу ОМТС';
       } else if (index === 3 && basePrice) {
         row.customerRate = row.customerPrice === basePrice.value
