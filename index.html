@@ -899,9 +899,7 @@ function renderCard(resetEntry = false) {
   const estimate = activeEstimate;
   const previousEntry = document.querySelector('#inline-position-content');
   const stage = estimateStage(estimate);
-  const showPrices = stage !== 1;
-  const columns = ['№', 'Позиция', 'Объём', 'Часы, ч',
-    ...(showPrices ? ['Цена ОМТС / ед.', 'Цена для расчёта / ед.', 'Сумма по строке'] : []),
+  const columns = ['№', 'Позиция', 'Объём', 'Часы, ч', 'Цена ОМТС / ед.', 'Цена для расчёта / ед.', 'Сумма по строке',
     'Чего не хватает', 'Следующий ответственный'];
   const waiting = estimate.rows.filter(row => nextStep(row, stage) === stage).length;
   const blocking = rowsBlockingHandoff(estimate, stage);
@@ -1013,16 +1011,16 @@ function renderCard(resetEntry = false) {
         '<button type="button" class="btn" data-delete-line="' + esc(row.id) + '">Удалить строку</button>' +
         '<button type="button" class="btn" data-add-after-line="' + esc(row.id) + '">Добавить расценку после</button>' +
         '<button type="button" class="btn" data-insert-after-line="' + esc(row.id) + '">Вставить после</button></div>';
-      return '<tr' + (showPrices && unitPrice == null ? ' class="unpriced-row"' : '') + '><td class="num">' + positionNumbers.get(row.id) +
+      return '<tr' + (unitPrice == null ? ' class="unpriced-row"' : '') + '><td class="num">' + positionNumbers.get(row.id) +
         '</td><td><button class="text-btn" data-row="' + esc(row.id) + '" type="button">' + esc(row.name) +
         '</button><span class="secondary">' + esc(categoryLabel(row.category)) + '</span>' +
         controls + '</td><td class="num">' + quantity(row.volume) + ' ' + esc(row.unit) +
-        '</td><td class="num">' + quantity(row.hours) + '</td>' + (showPrices ? '<td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
+        '</td><td class="num">' + quantity(row.hours) + '</td><td class="num">' + money(row.supplyPrice) + '</td><td class="num">' +
         (unitPrice == null ? '<span class="pill wait">Без цены</span>' : money(unitPrice)) +
         (previewSource ? '<span class="secondary">' + previewSource + '</span>' : '') +
         '</td><td class="num">' + money(amountCents == null ? null : amountCents / 100) +
         (amountCents != null && step ? '<span class="secondary">Предварительно</span>' : '') +
-        '</td>' : '') + '<td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
+        '</td><td><span class="pill ' + (step ? 'wait' : 'done') + '">' + (step ? step.missing : 'Готово') +
         '</span></td><td>' + (step ? step.role : '—') + '</td></tr>';
     };
     const rows = [];
@@ -1059,10 +1057,6 @@ function renderCard(resetEntry = false) {
       if (!section) continue;
       const addSection = '<div class="group-controls"><button type="button" class="btn" data-section-after="' +
         esc(section.id) + '">+ Раздел после</button></div>';
-      if (!showPrices) {
-        rows.push('<tr class="section-total"><td colspan="' + columns.length + '">' + addSection + '</td></tr>');
-        continue;
-      }
       const amounts = allRows.map(row => lineAmountCents(row.volume, estimateLinePrice(row).value));
       const subtotal = amounts.reduce((sum, amount) => sum + (amount ?? 0), 0);
       const withoutPrice = amounts.filter(amount => amount == null).length;
@@ -1339,7 +1333,6 @@ function renderDrawer(row, status = '', editingStep) {
   const values = row ? [
     ['Тип позиции', categoryLabel(row.category)], ['Объём', quantity(row.volume) + ' ' + row.unit],
     ...(row.category === 'Механизмы' ? [['Часы механизма', row.hours == null ? '—' : quantity(row.hours) + ' ч']] : []),
-    ...(stage === 1 ? [] : [
     ['Цена ОМТС / ед.', row.supplySkipped ? 'Цена ОМТС не указана' : money(row.supplyPrice)],
     ...(basePrice ? [
       ['Цена из справочника / ед.', money(basePrice.value)],
@@ -1348,7 +1341,6 @@ function renderDrawer(row, status = '', editingStep) {
     ['Цена заказчику / ед.', money(row.customerPrice)],
     ...(row.supplyRate ? [['Источник цены ОМТС', row.supplyRate]] : []),
     ...(row.customerRate ? [['Источник цены заказчику', row.customerRate]] : [])
-    ])
   ] : [];
   const route = workflowOrder.map((position, order) => {
     const step = steps[position];
@@ -1487,9 +1479,10 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       basePrices = [originalRate, ...basePrices.filter(price => price.code !== originalRate.code)];
     }
     const selectedPrice = basePrices.findIndex(price => price.code === originalRate?.code);
-    baseRate.hidden = estimateStage(activeEstimate) === 1;
+    const readOnlyPrice = estimateStage(activeEstimate) === 1;
     baseRate.innerHTML = basePrices.length
-      ? '<label>Расценка за единицу<select id="base-price" required>' +
+      ? (readOnlyPrice ? '<p class="note">Цена из справочника за единицу — ' + esc(priceOption(basePrices[Math.max(0, selectedPrice)])) + '</p>' : '') +
+        '<label' + (readOnlyPrice ? ' hidden' : '') + '>Расценка за единицу<select id="base-price"' + (readOnlyPrice ? ' disabled' : ' required') + '>' +
         basePrices.map((price, i) => '<option value="' + i + '"' + (i === selectedPrice ? ' selected' : '') + '>' + esc(priceOption(price)) + '</option>').join('') +
         '</select></label>'
       : directorPrice || (canAddWithoutCatalogPrice(category) && category !== 'Механизмы') ? '<p class="note">Строку можно добавить без цены. Цену укажет коммерческий директор.</p>'
@@ -1566,7 +1559,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       matches = found.slice(0, 50);
       suggestions.innerHTML = matches.map((position, i) =>
         '<div id="catalog-option-' + i + '" class="catalog-option" role="option" aria-selected="false" data-result="' + i + '">' +
-        (estimateStage(activeEstimate) === 1 ? '' : '<strong>' + esc(positionPriceLabel(position)) + '</strong>') + '<span>' +
+        '<strong>' + esc(positionPriceLabel(position)) + '</strong><span>' +
         esc(position.name + ' · ' + position.code) + '</span></div>').join('');
       count.textContent = !query ? '' : (category ? categoryLabel(category) + ' · ' : '') +
         (found.length ? 'Показано ' + matches.length + ' из ' + found.length : 'Подходящих позиций нет.');
@@ -1578,7 +1571,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
       if (!position) return;
       chosenPosition = position;
       positionQuery.value = position.name;
-      preview.textContent = estimateStage(activeEstimate) === 1 ? '' : positionPriceLabel(position);
+      preview.textContent = positionPriceLabel(position);
       count.textContent = '';
       showSuggestions(false);
       const name = form.elements.namedItem('name');
