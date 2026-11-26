@@ -574,11 +574,23 @@ function estimateLinePrice(row) {
   return rate ? { value: rate.value, source: 'Из справочника', origin: priceOrigin(rate), vat: rate.vat } : { value: null };
 }
 
+function estimateLineAmount(row) {
+  return lineAmountCents(row.volume, estimateLinePrice(row).value);
+}
+
+function groupRows(group) {
+  return group.entries.flatMap(entry => entry.row ? [entry.row] : entry.rows);
+}
+
+function sectionSubtotal(rows) {
+  return rows.reduce((sum, row) => sum + (estimateLineAmount(row) ?? 0), 0);
+}
+
 function estimateTotals(estimate) {
   const amounts = { 'Работы': 0, 'Материалы': 0, 'Механизмы': 0, 'Прочее': 0 };
   let missing = 0;
   for (const row of estimate.rows) {
-    const amount = lineAmountCents(row.volume, estimateLinePrice(row).value);
+    const amount = estimateLineAmount(row);
     if (amount == null) {
       missing++;
       continue;
@@ -594,18 +606,22 @@ function estimateTotals(estimate) {
   return { amounts, subtotal, vat, total: vat == null ? null : subtotal + vat, missing };
 }
 
-function renderEstimateTotals(estimate, totals) {
+function renderEstimateTotals(estimate, totals, groups) {
   const { amounts, subtotal, vat, total } = totals;
   const showMoney = value => value == null ? '—' : money(value / 100);
   const line = (label, value) => '<div><dt>' + label + '</dt><dd>' + showMoney(value) + '</dd></div>';
   const vatLabel = estimate.vatRate == null ? 'НДС (процент не задан)' : 'НДС ' + quantity(estimate.vatRate) + '%';
   return '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
-    '<h2 id="estimate-totals-title">Итоги сметы</h2><dl class="detail">' +
+    '<h2 id="estimate-totals-title">Итоги сметы</h2>' +
+    (estimate.sections?.length ? '<details><summary>Суммы по разделам</summary><dl class="detail">' + groups.map(group =>
+      line(group.section ? esc(sectionLabel(estimate, group.section.id)) : 'Без раздела', sectionSubtotal(groupRows(group)))
+    ).join('') + line('Итого по всем строкам до начисления НДС', subtotal) + '</dl></details>' : '') +
+    '<dl class="detail">' +
     line('Всего работы', amounts['Работы']) +
     line('Всего материалы', amounts['Материалы']) +
     line('Всего машины, механизмы и доставка', amounts['Механизмы']) +
     line('Всего прочее', amounts['Прочее']) +
-    line('ИТОГО по смете', subtotal) + line(vatLabel, vat) +
+    line('ИТОГО по смете до начисления НДС', subtotal) + line(vatLabel, vat) +
     line('ИТОГО с НДС', total) + '</dl>' +
     '<p class="note">НДС начисляется на работы и прочее.</p>' +
     '<form class="vat-form" id="estimate-vat-form">' +
@@ -920,6 +936,7 @@ function renderCard(resetEntry = false) {
   };
   const ready = estimate.rows.filter(row => nextStep(row) === 4);
   const totals = estimateTotals(estimate);
+  const groups = orderedGroups(estimate);
   const totalNote = [
     totals.vat == null ? 'НДС ещё не задан' : '',
     totals.missing ? 'Без цены: ' + totals.missing : '',
@@ -963,7 +980,7 @@ function renderCard(resetEntry = false) {
     '<div id="results"></div>' +
     '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
     '<div id="inline-position-content"></div></section></section>' +
-    renderEstimateTotals(estimate, totals);
+    renderEstimateTotals(estimate, totals, groups);
   const vatForm = document.querySelector('#estimate-vat-form');
   if (vatForm) vatForm.onsubmit = event => {
     event.preventDefault();
@@ -992,8 +1009,6 @@ function renderCard(resetEntry = false) {
         (!sectionFilter || row.structure === sectionFilter || row.structure?.startsWith(sectionFilter + '/')) &&
         rowMatches(row, cardFilters.query);
     });
-    const groups = orderedGroups(estimate);
-    const groupRows = group => group.entries.flatMap(entry => entry.row ? [entry.row] : entry.rows);
     const positionNumbers = new Map(groups.flatMap(groupRows).map((row, index) => [row.id, index + 1]));
     const visibleIds = new Set(visible.map(row => row.id));
     const move = document.querySelector('#move-visible');
@@ -1056,16 +1071,20 @@ function renderCard(resetEntry = false) {
         if (!matching.length && !(showEmptyGroups && (!sectionFilter || sectionFilter === section.id || sectionFilter === key))) continue;
         rows.push(renderHeader(key, entry.child.name, true), ...matching.map(renderRow));
       }
-      if (!section) continue;
-      const addSection = '<div class="group-controls"><button type="button" class="btn" data-section-after="' +
-        esc(section.id) + '">+ Раздел после</button></div>';
-      const amounts = allRows.map(row => lineAmountCents(row.volume, estimateLinePrice(row).value));
-      const subtotal = amounts.reduce((sum, amount) => sum + (amount ?? 0), 0);
-      const withoutPrice = amounts.filter(amount => amount == null).length;
+      if (!section && !estimate.sections?.length) continue;
+      const addSection = section ? '<div class="group-controls"><button type="button" class="btn" data-section-after="' +
+        esc(section.id) + '">+ Раздел после</button></div>' : '';
+      const shownRows = allRows.filter(row => visibleIds.has(row.id));
+      const withoutPrice = allRows.filter(row => estimateLineAmount(row) == null).length;
       const preview = allRows.some(row => row.customerPrice == null);
-      rows.push('<tr class="section-total"><td colspan="6">Итого по разделу «' + esc(sectionLabel(estimate, section.id)) + '»' +
+      if (shownRows.length && shownRows.length !== allRows.length) {
+        rows.push('<tr class="section-total"><td colspan="6">Итого по показанным строкам</td>' +
+          '<td class="num">' + money(sectionSubtotal(shownRows) / 100) + '</td><td colspan="2"></td></tr>');
+      }
+      rows.push('<tr class="section-total"><td colspan="6">' +
+        (section ? 'Итого по разделу «' + esc(sectionLabel(estimate, section.id)) + '»' : 'Итого по строкам без раздела') +
         addSection + '</td>' +
-        '<td class="num">' + money(subtotal / 100) + '</td><td colspan="2">' +
+        '<td class="num">' + money(sectionSubtotal(allRows) / 100) + '</td><td colspan="2">' +
         (preview ? (withoutPrice ? 'Без цены: ' + withoutPrice + ' · ' : '') + 'Предварительно' : '') +
         (allRows.some(row => !visibleIds.has(row.id)) ? '<span class="secondary">Весь раздел</span>' : '') + '</td></tr>');
     }
