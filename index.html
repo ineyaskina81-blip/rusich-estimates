@@ -2710,6 +2710,7 @@ const workExecution = (() => {
   const blank = () => ({ contracts: [], reports: [], acts: [] });
   const selected = { object: '', contract: '', report: '' };
   const units = value => Math.round(value * 1e6) / 1e6;
+  const maxQuantity = 100000000;
   const paidStates = ['Не оплачено', 'Частично оплачено', 'Оплачено'];
   const vatModes = { none: 'Без НДС', add: 'Начислить НДС сверху', included: 'НДС включён в цену', estimate: 'Как в смете заказчика' };
   const option = (value, label, current) => '<option value="' + esc(value) + '"' +
@@ -2830,7 +2831,8 @@ const workExecution = (() => {
         const balance = units(item.volume - completed);
         const volumeCell = value => '<td class="num' + (balance < 0 ? ' execution-overrun' : '') + '">' +
           volumeFormat.format(value) + '</td>';
-        const edit = key => field(key + index, key === 'comment' ? 'Комментарий' : 'Объём', entry[key] ?? '', 'text', false);
+        const edit = key => field(key + index, key === 'comment' ? 'Комментарий' : 'Объём', entry[key] ?? '', 'text', false,
+          key === 'actual' ? ' aria-describedby="execution-actual-help"' : '');
         return '<tr><td><strong>' + esc(item.number + ' · ' + item.name) + '</strong><span class="secondary">' + esc(item.unit) +
           ' · ' + money(item.price) + '/ед.</span>' + (figures.excess > 0 ? '<span class="pill wait">Превышение ' +
           quantity(figures.excess) + ' ' + esc(item.unit) + '</span>' : '') +
@@ -2844,8 +2846,10 @@ const workExecution = (() => {
       }), 'Добавьте позиции в договорную смету.') + (contract.items.length ? button('Сохранить выполнение') : ''));
     return create + '<section class="panel execution-box"><div class="positions-head"><h2>Выполнение за период</h2>' +
       '<label>Отчётный период <select id="execution-report">' + reportList.map(item => option(item.id, periodLabel(item), report.id)).join('') +
-      '</select></label></div><p class="note">«Выполнено всего» — сумма сохранённых объёмов из графы «Выполнено за период» ' +
-      'за все периоды по этому договору. Отрицательный остаток показывает превышение сметного объёма.</p>' +
+      '</select></label></div><p class="note" id="execution-actual-help">В графе «Выполнено за период» введите объём числом, ' +
+      'процент от объёма по смете (например, 25%) или * для 100%. После сохранения в графе будет указан объём в единицах позиции.</p>' +
+      '<p class="note">«Выполнено всего» — сумма сохранённых объёмов по этому договору за все периоды. ' +
+      'Отрицательный остаток показывает превышение сметного объёма.</p>' +
       reportForm + '</section>';
   }
 
@@ -2985,7 +2989,7 @@ const workExecution = (() => {
       for (const [index, item] of contract.items.entries()) {
         const submitted = numeric(read('submitted' + index) || '0');
         const actualText = read('actual' + index);
-        const actual = actualText ? numeric(actualText) : null;
+        const actual = actualText ? readActualVolume(actualText, item) : null;
         const verified = numeric(read('verified' + index) || '0');
         const inPeriod = reportAccepted(data, report, item.id);
         ok(verified <= submitted && (actual == null || submitted <= actual) && verified >= inPeriod,
@@ -3038,7 +3042,17 @@ const workExecution = (() => {
     return value;
   }
 
-  function numeric(value, max = 100000000, label = 'Объём или цена') {
+  function readActualVolume(value, item) {
+    if (value === '*') return units(item.volume);
+    if (!value.endsWith('%')) return numeric(value);
+    const percent = readEstimateNumber(value.slice(0, -1));
+    const volume = item.volume * (percent / 100);
+    ok(Number.isFinite(volume) && volume >= 0 && volume <= maxQuantity,
+      item.name + ' · введите процент, который даёт допустимый объём (например, 25%).');
+    return units(volume);
+  }
+
+  function numeric(value, max = maxQuantity, label = 'Объём или цена') {
     const number = readEstimateNumber(value);
     ok(Number.isFinite(number) && number >= 0 && number <= max, label + ' · введите число от 0 до ' + max + '.');
     return units(number);
