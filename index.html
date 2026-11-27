@@ -65,7 +65,9 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .estimate-section-tools select{min-height:34px}
 .estimate-section-tools select{max-width:min(240px,100%);background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px}
 .estimate-section-tools .btn:disabled{opacity:.5;cursor:default}
-.estimate-totals{margin-top:16px;padding-bottom:16px}
+.estimate-totals{margin-top:16px;margin-bottom:56px;padding-bottom:16px}
+.estimate-scroll-controls{position:fixed;z-index:4;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:9px;background:#fff;box-shadow:0 3px 12px #17264124}
+.estimate-scroll-controls .btn{color:var(--brand-dark);white-space:nowrap}
 .estimate-totals .detail{margin:10px 0 0;display:block}
 .estimate-totals .detail>div{display:flex;justify-content:space-between;gap:12px;padding:8px 0}
 .estimate-totals .detail>div+div{border-top:1px solid var(--line)}
@@ -718,7 +720,7 @@ function renderEstimateTotals(estimate, totals, groups) {
   const line = (label, value) => '<div><dt>' + label + '</dt><dd>' + showMoney(value) + '</dd></div>';
   const vatLabel = estimate.vatRate == null ? 'НДС (процент не задан)' : 'НДС ' + quantity(estimate.vatRate) + '%';
   return '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
-    '<h2 id="estimate-totals-title">Итоги сметы</h2>' +
+    '<h2 id="estimate-totals-title" tabindex="-1">Итоги сметы</h2>' +
     (estimate.sections?.length ? '<details><summary>Суммы по разделам</summary><dl class="detail">' + groups.map(group =>
       line(group.section ? esc(sectionLabel(estimate, group.section.id)) : 'Без раздела', sectionSubtotal(groupRows(group)))
     ).join('') + line('Итого по всем строкам до начисления НДС', subtotal) + '</dl></details>' : '') +
@@ -1092,7 +1094,20 @@ function renderCard(resetEntry = false) {
     '<div id="results"></div>' +
     '<section class="inline-position" aria-labelledby="inline-position-title" id="inline-position">' +
     '<div id="inline-position-content"></div></section></section>' +
-    renderEstimateTotals(estimate, totals, groups);
+    renderEstimateTotals(estimate, totals, groups) +
+    '<nav class="estimate-scroll-controls" aria-label="Переход по смете">' +
+    '<button class="btn" id="scroll-estimate-top" type="button"><span aria-hidden="true">↑</span> К началу</button>' +
+    '<button class="btn" id="scroll-estimate-end" type="button"><span aria-hidden="true">↓</span> К концу</button></nav>';
+  document.querySelector('#scroll-estimate-top').onclick = () => {
+    const heading = main.querySelector('h1');
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  };
+  document.querySelector('#scroll-estimate-end').onclick = () => {
+    document.querySelector('#estimate-totals-title').focus({ preventScroll: true });
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  };
   const vatForm = document.querySelector('#estimate-vat-form');
   if (vatForm) vatForm.onsubmit = event => {
     event.preventDefault();
