@@ -93,6 +93,19 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
   .brand-mobile{display:block;width:100px;margin-bottom:5px;color:var(--brand)}
   .top .crumb{flex-wrap:wrap;row-gap:3px}
 }
+.execution-layout{display:grid;gap:14px}
+.execution-box{padding:15px;min-width:0}
+.execution-box>summary{color:var(--brand-dark);cursor:pointer;font-weight:700}
+.execution-box>h2,.execution-box .positions-head h2{margin:0 0 8px}
+.execution-form{margin:12px 0 0}
+.execution-form .fields{grid-template-columns:repeat(auto-fit,minmax(155px,1fr))}
+.execution-form label,.execution-box .positions-head label,.execution-box>label{display:grid;gap:4px;font-size:13px}
+.execution-form td input{width:84px;min-width:65px;padding:5px}
+.execution-form td input[name^="comment"]{width:180px}
+.execution-form .table-wrap{margin-bottom:8px}
+.execution-error{color:#842923;background:#fff1ee;border-radius:8px;padding:10px 12px}
+.heading .heading-actions{display:flex;flex-wrap:wrap;gap:8px}
+.heading a.btn{text-decoration:none;display:inline-flex;align-items:center}
 </style>
 </head>
 <body>
@@ -100,6 +113,7 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
   <aside aria-label="Навигация">
     <div class="brand"><span class="brand-logo" role="img" aria-label="ООО ИСК Русич"></span></div>
     <a class="nav" href="#estimates"><span aria-hidden="true">▤</span>Сметы</a>
+    <a class="nav" href="#execution">Выполнение работ</a>
     <div class="side-note">Учебные данные<br>Внутренняя система смет</div>
   </aside>
   <div>
@@ -555,7 +569,8 @@ function renderList() {
   crumb.innerHTML = '<span aria-current="page">Сметы</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Сметный отдел</p><h1>Сметы</h1>' +
     '<p class="subtitle">Создайте смету или откройте её из реестра.</p></div>' +
-    '<button class="btn primary compact" id="create-estimate" type="button" aria-haspopup="dialog">+ Новая смета</button></div>' +
+    '<div class="heading-actions"><a class="btn" href="#execution">Выполнение работ</a>' +
+    '<button class="btn primary compact" id="create-estimate" type="button" aria-haspopup="dialog">+ Новая смета</button></div></div>' +
     '<section class="stats" aria-label="Состояние смет">' + stat('Всего смет', estimates.length) +
     stat('В работе', estimates.length - completed) + stat('Готовы', completed) + '</section>' +
     '<section class="panel" aria-labelledby="list-title"><div class="panel-head"><h2 id="list-title">Реестр смет</h2></div>' +
@@ -1099,7 +1114,8 @@ function renderCard(resetEntry = false) {
   crumb.innerHTML = '<a href="#estimates">Сметы</a><span aria-hidden="true">/</span><span aria-current="page">№ ' + estimate.id + '</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
     '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div>' +
-    '<button class="btn primary compact" id="download-estimate" type="button" aria-haspopup="dialog">Выгрузить в Excel</button></div>' +
+    '<div class="heading-actions"><a class="btn" href="#execution/' + encodeURIComponent(estimate.id) + '">Выполнение работ</a>' +
+    '<button class="btn primary compact" id="download-estimate" type="button" aria-haspopup="dialog">Выгрузить в Excel</button></div></div>' +
     '<div class="panel estimate-total-bar" aria-label="Итог и управление разделами"><div><strong>' +
     (totals.total == null ? 'ИТОГО по смете ' + money(totals.subtotal / 100) : 'ИТОГО с НДС ' + money(totals.total / 100)) +
     '</strong><span class="note secondary">' + esc(totalNote) + '</span></div>' +
@@ -2160,6 +2176,8 @@ sectionForm.onsubmit = event => {
 function renderScreen(focusHeading = false) {
   const match = location.hash.match(/^#estimate\/(.+)$/);
   const estimate = match ? estimates.find(item => item.id === match[1]) : null;
+  const executionRoute = location.hash.match(/^#execution(?:\/(.+))?$/);
+  const executionObject = executionRoute?.[1] ? estimates.find(item => encodeURIComponent(item.id) === executionRoute[1]) : null;
   if (dialog.open) dialog.close();
   if (exportDialog.open) exportDialog.close();
   if (newEstimateDialog.open) newEstimateDialog.close();
@@ -2175,9 +2193,10 @@ function renderScreen(focusHeading = false) {
     editingLine = null;
   }
   activeEstimate = estimate;
-  if (estimate) renderCard();
+  if (executionRoute) workExecution.render(executionObject);
+  else if (estimate) renderCard();
   else renderList();
-  document.title = estimate ? 'Смета № ' + estimate.id + ' · Русич' : 'Сметы · Русич';
+  document.title = executionRoute ? 'Выполнение работ · Русич' : estimate ? 'Смета № ' + estimate.id + ' · Русич' : 'Сметы · Русич';
   if (focusHeading) {
     const heading = main.querySelector('h1');
     heading.tabIndex = -1;
@@ -2454,6 +2473,537 @@ exportForm.onsubmit = event => {
     document.querySelector('#estimate-export-status').textContent = 'Не удалось сформировать файл Excel. Попробуйте выгрузить смету ещё раз.';
   }
 };
+
+const executionActTemplate = {"rows":[[1,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",52,null],["G",54,"Унифицированная форма № КС-2"],["H",52,null],["I",52,null],["J",52,null]]],[2,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",52,null],["G",54,"Утверждена постановлением Госкомстата России"],["H",52,null],["I",52,null],["J",52,null]]],[3,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",52,null],["G",54,"от 11 ноября 1999 года №100"],["H",52,null],["I",52,null],["J",52,null]]],[4,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",52,null],["G",52,null],["H",49,"Код"],["I",66,null],["J",67,null]]],[5,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",52,null],["G",56,"Форма по ОКУД"],["H",49,"0322005"],["I",66,null],["J",67,null]]],[6,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",52,null],["G",56,null],["H",68,null],["I",69,null],["J",70,null]]],[7,15.0,[["A",57,"Инвестор"],["B",52,null],["C",71,null],["D",71,null],["E",71,null],["F",71,null],["G",56,"по ОКПО"],["H",72,null],["I",73,null],["J",74,null]]],[8,15.0,[["A",52,null],["B",52,null],["C",75,"(организация, адрес, телефон, факс)"],["D",75,null],["E",75,null],["F",75,null],["G",56,null],["H",68,null],["I",69,null],["J",70,null]]],[9,24.75,[["A",57,"Заказчик (Подрядчик)"],["B",52,null],["C",71,null],["D",71,null],["E",71,null],["F",71,null],["G",56,"по ОКПО"],["H",72,null],["I",73,null],["J",74,null]]],[10,15.0,[["A",52,null],["B",52,null],["C",75,"(организация, адрес, телефон, факс)"],["D",75,null],["E",75,null],["F",75,null],["G",56,null],["H",68,null],["I",69,null],["J",70,null]]],[11,27.0,[["A",57,"Подрядчик (Субподрядчик)"],["B",52,null],["C",71,null],["D",71,null],["E",71,null],["F",71,null],["G",56,"по ОКПО"],["H",72,null],["I",73,null],["J",74,null]]],[12,15.0,[["A",52,null],["B",52,null],["C",75,"(организация, адрес, телефон, факс)"],["D",75,null],["E",75,null],["F",75,null],["G",52,null],["H",68,null],["I",69,null],["J",70,null]]],[13,27.0,[["A",57,"Стройка"],["B",52,null],["C",76,null],["D",76,null],["E",76,null],["F",76,null],["G",52,null],["H",72,null],["I",73,null],["J",74,null]]],[14,12.0,[["A",52,null],["B",52,null],["C",75,"(наименование, адрес)"],["D",75,null],["E",75,null],["F",52,null],["G",52,null],["H",68,null],["I",69,null],["J",70,null]]],[15,30.75,[["A",57,"Объект"],["B",52,null],["C",76,null],["D",76,null],["E",76,null],["F",76,null],["G",52,null],["H",72,null],["I",73,null],["J",74,null]]],[16,15.0,[["A",52,null],["B",52,null],["C",75,"(наименование)"],["D",75,null],["E",75,null],["F",52,null],["G",56,"Вид деятельности по ОКДП"],["H",49,null],["I",66,null],["J",67,null]]],[17,15.0,[["A",52,null],["B",52,null],["C",52,null],["D",52,null],["E",52,null],["F",56,"Договор подряда (контракт)"],["G",59,"номер"],["H",49,null],["I",66,null],["J",67,null]]],[18,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",53,null],["F",53,null],["G",59,"дата"],["H",49,null],["I",66,null],["J",67,null]]],[19,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",53,null],["F",53,null],["G",60,"Вид операции"],["H",49,null],["I",66,null],["J",67,null]]],[20,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",53,null],["F",60,null],["G",58,null],["H",58,null],["I",58,null],["J",52,null]]],[21,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",53,null],["F",60,null],["G",77,"Номер документа"],["H",77,"Дата составления"],["I",78,"Отчетный период"],["J",78,null]]],[22,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",53,null],["F",60,null],["G",77,null],["H",77,null],["I",61,"с"],["J",61,"по"]]],[23,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",62,"АКТ"],["F",60,null],["G",59,null],["H",59,null],["I",59,null],["J",59,null]]],[24,15.0,[["A",53,null],["B",53,null],["C",53,null],["D",53,null],["E",62,"О ПРИЕМКЕ ВЫПОЛНЕННЫХ РАБОТ"],["F",53,null],["G",53,null],["H",52,null],["I",53,null],["J",53,null]]],[25,13.5,[["A",79,null],["B",79,null],["C",79,null],["D",79,null],["E",79,null],["F",79,null],["G",79,null],["H",79,null],["I",79,null],["J",79,null]]],[26,13.5,[["A",5,"Сметная стоимость"],["B",5,null],["C",6,null],["D",7,null],["E",8,"тыс.руб."],["G",5,null],["H",5,null],["I",5,null],["J",5,null]]],[27,13.5,[]],[28,36.0,[["A",25,"Номер"],["B",26,null],["C",27,"Наименование работ"],["D",28,null],["E",29,null],["F",36,"Номер единичной расценки"],["G",36,"Единица измерения"],["H",25,"Выполнено работ"],["I",37,null],["J",26,null]]],[29,36.75,[["A",38,"по порядку"],["B",38,"позиций по смете"],["C",30,null],["D",31,null],["E",32,null],["F",36,null],["G",36,null],["H",38,"количество\nна ед./\nвсего"],["I",38,"цена за единицу, руб."],["J",38,"стоимость, руб."]]],[30,12.0,[["A",39,null],["B",39,null],["C",33,null],["D",34,null],["E",35,null],["F",36,null],["G",36,null],["H",39,null],["I",39,null],["J",39,null]]],[31,15.0,[["A",10,1.0],["B",10,2.0],["C",40,3.0],["D",41,null],["E",42,null],["F",10,4.0],["G",10,5.0],["H",10,6.0],["I",10,7.0],["J",10,8.0]]]],"cols":[10.28515625,10.7109375,19.85546875,17.140625,20.5703125,17.7109375,11.0,10.85546875,11.28515625,11.85546875],"merges":["A25:J25","H4:J4","H5:J5","H6:J6","C7:F7","H7:J7","C8:F8","H8:J8","C9:F9","H9:J9","C10:F10","H10:J10","C13:F13","H12:J12","H13:J13","C11:F11","C31:E31","A28:B28","C28:E30","F28:F30","G28:G30","H28:J28","A29:A30","B29:B30","H29:H30","I29:I30","J29:J30","H17:J17","H18:J18","H19:J19","H21:H22","I21:J21","G21:G22","H15:J15","C16:E16","H16:J16","C14:E14","H14:J14","C15:F15","H11:J11","C12:F12"],"money":92,"volume":93,"styles":"\u003cstyleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\" xmlns:x16r2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/02/main\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\" mc:Ignorable=\"x14ac x16r2 xr\">\u003cfonts count=\"16\" x14ac:knownFonts=\"1\">\u003cfont>\u003csz val=\"11\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Calibri\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"8\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"8\"/>\u003cname val=\"Arial\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003ci/>\u003csz val=\"8\"/>\u003cname val=\"Arial\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"9\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003cb/>\u003csz val=\"10\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003cb/>\u003csz val=\"8\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"8\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"8\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003ci/>\u003csz val=\"8\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003ci/>\u003csz val=\"7\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003cb/>\u003csz val=\"10\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"10\"/>\u003cname val=\"Arial Cyr\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"9\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003ci/>\u003csz val=\"8\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Arial\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003cfont>\u003csz val=\"10\"/>\u003ccolor rgb=\"FF000000\"/>\u003cname val=\"Calibri\"/>\u003cfamily val=\"2\"/>\u003ccharset val=\"204\"/>\u003c/font>\u003c/fonts>\u003cfills count=\"2\">\u003cfill>\u003cpatternFill patternType=\"none\"/>\u003c/fill>\u003cfill>\u003cpatternFill patternType=\"gray125\"/>\u003c/fill>\u003c/fills>\u003cborders count=\"15\">\u003cborder>\u003cleft/>\u003cright/>\u003ctop/>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright/>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright/>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright/>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright/>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright/>\u003ctop/>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright/>\u003ctop/>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop/>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/top>\u003cbottom/>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop/>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/left>\u003cright/>\u003ctop/>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003cborder>\u003cleft/>\u003cright style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/right>\u003ctop/>\u003cbottom style=\"thin\">\u003ccolor auto=\"1\"/>\u003c/bottom>\u003cdiagonal/>\u003c/border>\u003c/borders>\u003ccellStyleXfs count=\"2\">\u003cxf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/>\u003cxf numFmtId=\"0\" fontId=\"12\" fillId=\"0\" borderId=\"0\"/>\u003c/cellStyleXfs>\u003ccellXfs count=\"94\">\u003cxf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>\u003cxf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\"/>\u003cxf numFmtId=\"49\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"7\" xfId=\"0\" applyFont=\"1\" applyBorder=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"7\" xfId=\"0\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"5\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"1\" fontId=\"6\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"4\" fontId=\"6\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"6\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\" vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"6\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"6\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\" vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"6\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"3\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"3\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"3\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"4\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"5\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"6\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"8\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"9\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"13\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"7\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"14\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"2\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"11\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"12\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"2\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"4\" fillId=\"0\" borderId=\"3\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"5\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"5\" fillId=\"0\" borderId=\"2\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"5\" fillId=\"0\" borderId=\"3\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"2\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"6\" fillId=\"0\" borderId=\"3\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>\u003cxf numFmtId=\"0\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\"/>\u003cxf numFmtId=\"49\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\"/>\u003cxf numFmtId=\"49\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"11\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"9\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"2\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"3\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"4\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"5\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"6\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"7\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"8\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"9\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"10\" fillId=\"0\" borderId=\"5\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"7\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"center\"/>\u003c/xf>\u003cxf numFmtId=\"49\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"12\" fillId=\"0\" borderId=\"0\" xfId=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>\u003cxf numFmtId=\"0\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"7\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"8\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"12\" fillId=\"0\" borderId=\"0\" xfId=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"left\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"12\" fillId=\"0\" borderId=\"0\" xfId=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"13\" fillId=\"0\" borderId=\"0\" xfId=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"13\" fillId=\"0\" borderId=\"0\" xfId=\"1\" applyFont=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\" vertical=\"top\"/>\u003c/xf>\u003cxf numFmtId=\"0\" fontId=\"14\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\u003cxf numFmtId=\"0\" fontId=\"15\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\u003cxf numFmtId=\"4\" fontId=\"6\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"right\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003cxf numFmtId=\"2\" fontId=\"6\" fillId=\"0\" borderId=\"10\" xfId=\"0\" applyNumberFormat=\"1\" applyFont=\"1\" applyBorder=\"1\" applyAlignment=\"1\">\u003calignment horizontal=\"center\" vertical=\"top\" wrapText=\"1\"/>\u003c/xf>\u003c/cellXfs>\u003ccellStyles count=\"2\">\u003ccellStyle name=\"Обычный\" xfId=\"0\" builtinId=\"0\"/>\u003ccellStyle name=\"Обычный 2\" xfId=\"1\" xr:uid=\"{60076B83-652D-4DD3-9D79-604AFDFF2973}\"/>\u003c/cellStyles>\u003cdxfs count=\"0\"/>\u003ctableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/>\u003cextLst>\u003cext xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" uri=\"{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}\">\u003cx14:slicerStyles defaultSlicerStyle=\"SlicerStyleLight1\"/>\u003c/ext>\u003cext xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\" uri=\"{9260A510-F301-46a8-8635-F512D64BE5F5}\">\u003cx15:timelineStyles defaultTimelineStyle=\"TimeSlicerStyleLight1\"/>\u003c/ext>\u003c/extLst>\u003c/styleSheet>","theme":"\u003c?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n\u003ca:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Тема Office\">\u003ca:themeElements>\u003ca:clrScheme name=\"Стандартная\">\u003ca:dk1>\u003ca:sysClr val=\"windowText\" lastClr=\"000000\"/>\u003c/a:dk1>\u003ca:lt1>\u003ca:sysClr val=\"window\" lastClr=\"FFFFFF\"/>\u003c/a:lt1>\u003ca:dk2>\u003ca:srgbClr val=\"44546A\"/>\u003c/a:dk2>\u003ca:lt2>\u003ca:srgbClr val=\"E7E6E6\"/>\u003c/a:lt2>\u003ca:accent1>\u003ca:srgbClr val=\"4472C4\"/>\u003c/a:accent1>\u003ca:accent2>\u003ca:srgbClr val=\"ED7D31\"/>\u003c/a:accent2>\u003ca:accent3>\u003ca:srgbClr val=\"A5A5A5\"/>\u003c/a:accent3>\u003ca:accent4>\u003ca:srgbClr val=\"FFC000\"/>\u003c/a:accent4>\u003ca:accent5>\u003ca:srgbClr val=\"5B9BD5\"/>\u003c/a:accent5>\u003ca:accent6>\u003ca:srgbClr val=\"70AD47\"/>\u003c/a:accent6>\u003ca:hlink>\u003ca:srgbClr val=\"0563C1\"/>\u003c/a:hlink>\u003ca:folHlink>\u003ca:srgbClr val=\"954F72\"/>\u003c/a:folHlink>\u003c/a:clrScheme>\u003ca:fontScheme name=\"Стандартная\">\u003ca:majorFont>\u003ca:latin typeface=\"Calibri Light\" panose=\"020F0302020204030204\"/>\u003ca:ea typeface=\"\"/>\u003ca:cs typeface=\"\"/>\u003ca:font script=\"Jpan\" typeface=\"游ゴシック Light\"/>\u003ca:font script=\"Hang\" typeface=\"맑은 고딕\"/>\u003ca:font script=\"Hans\" typeface=\"等线 Light\"/>\u003ca:font script=\"Hant\" typeface=\"新細明體\"/>\u003ca:font script=\"Arab\" typeface=\"Times New Roman\"/>\u003ca:font script=\"Hebr\" typeface=\"Times New Roman\"/>\u003ca:font script=\"Thai\" typeface=\"Tahoma\"/>\u003ca:font script=\"Ethi\" typeface=\"Nyala\"/>\u003ca:font script=\"Beng\" typeface=\"Vrinda\"/>\u003ca:font script=\"Gujr\" typeface=\"Shruti\"/>\u003ca:font script=\"Khmr\" typeface=\"MoolBoran\"/>\u003ca:font script=\"Knda\" typeface=\"Tunga\"/>\u003ca:font script=\"Guru\" typeface=\"Raavi\"/>\u003ca:font script=\"Cans\" typeface=\"Euphemia\"/>\u003ca:font script=\"Cher\" typeface=\"Plantagenet Cherokee\"/>\u003ca:font script=\"Yiii\" typeface=\"Microsoft Yi Baiti\"/>\u003ca:font script=\"Tibt\" typeface=\"Microsoft Himalaya\"/>\u003ca:font script=\"Thaa\" typeface=\"MV Boli\"/>\u003ca:font script=\"Deva\" typeface=\"Mangal\"/>\u003ca:font script=\"Telu\" typeface=\"Gautami\"/>\u003ca:font script=\"Taml\" typeface=\"Latha\"/>\u003ca:font script=\"Syrc\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Orya\" typeface=\"Kalinga\"/>\u003ca:font script=\"Mlym\" typeface=\"Kartika\"/>\u003ca:font script=\"Laoo\" typeface=\"DokChampa\"/>\u003ca:font script=\"Sinh\" typeface=\"Iskoola Pota\"/>\u003ca:font script=\"Mong\" typeface=\"Mongolian Baiti\"/>\u003ca:font script=\"Viet\" typeface=\"Times New Roman\"/>\u003ca:font script=\"Uigh\" typeface=\"Microsoft Uighur\"/>\u003ca:font script=\"Geor\" typeface=\"Sylfaen\"/>\u003ca:font script=\"Armn\" typeface=\"Arial\"/>\u003ca:font script=\"Bugi\" typeface=\"Leelawadee UI\"/>\u003ca:font script=\"Bopo\" typeface=\"Microsoft JhengHei\"/>\u003ca:font script=\"Java\" typeface=\"Javanese Text\"/>\u003ca:font script=\"Lisu\" typeface=\"Segoe UI\"/>\u003ca:font script=\"Mymr\" typeface=\"Myanmar Text\"/>\u003ca:font script=\"Nkoo\" typeface=\"Ebrima\"/>\u003ca:font script=\"Olck\" typeface=\"Nirmala UI\"/>\u003ca:font script=\"Osma\" typeface=\"Ebrima\"/>\u003ca:font script=\"Phag\" typeface=\"Phagspa\"/>\u003ca:font script=\"Syrn\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Syrj\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Syre\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Sora\" typeface=\"Nirmala UI\"/>\u003ca:font script=\"Tale\" typeface=\"Microsoft Tai Le\"/>\u003ca:font script=\"Talu\" typeface=\"Microsoft New Tai Lue\"/>\u003ca:font script=\"Tfng\" typeface=\"Ebrima\"/>\u003c/a:majorFont>\u003ca:minorFont>\u003ca:latin typeface=\"Calibri\" panose=\"020F0502020204030204\"/>\u003ca:ea typeface=\"\"/>\u003ca:cs typeface=\"\"/>\u003ca:font script=\"Jpan\" typeface=\"游ゴシック\"/>\u003ca:font script=\"Hang\" typeface=\"맑은 고딕\"/>\u003ca:font script=\"Hans\" typeface=\"等线\"/>\u003ca:font script=\"Hant\" typeface=\"新細明體\"/>\u003ca:font script=\"Arab\" typeface=\"Arial\"/>\u003ca:font script=\"Hebr\" typeface=\"Arial\"/>\u003ca:font script=\"Thai\" typeface=\"Tahoma\"/>\u003ca:font script=\"Ethi\" typeface=\"Nyala\"/>\u003ca:font script=\"Beng\" typeface=\"Vrinda\"/>\u003ca:font script=\"Gujr\" typeface=\"Shruti\"/>\u003ca:font script=\"Khmr\" typeface=\"DaunPenh\"/>\u003ca:font script=\"Knda\" typeface=\"Tunga\"/>\u003ca:font script=\"Guru\" typeface=\"Raavi\"/>\u003ca:font script=\"Cans\" typeface=\"Euphemia\"/>\u003ca:font script=\"Cher\" typeface=\"Plantagenet Cherokee\"/>\u003ca:font script=\"Yiii\" typeface=\"Microsoft Yi Baiti\"/>\u003ca:font script=\"Tibt\" typeface=\"Microsoft Himalaya\"/>\u003ca:font script=\"Thaa\" typeface=\"MV Boli\"/>\u003ca:font script=\"Deva\" typeface=\"Mangal\"/>\u003ca:font script=\"Telu\" typeface=\"Gautami\"/>\u003ca:font script=\"Taml\" typeface=\"Latha\"/>\u003ca:font script=\"Syrc\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Orya\" typeface=\"Kalinga\"/>\u003ca:font script=\"Mlym\" typeface=\"Kartika\"/>\u003ca:font script=\"Laoo\" typeface=\"DokChampa\"/>\u003ca:font script=\"Sinh\" typeface=\"Iskoola Pota\"/>\u003ca:font script=\"Mong\" typeface=\"Mongolian Baiti\"/>\u003ca:font script=\"Viet\" typeface=\"Arial\"/>\u003ca:font script=\"Uigh\" typeface=\"Microsoft Uighur\"/>\u003ca:font script=\"Geor\" typeface=\"Sylfaen\"/>\u003ca:font script=\"Armn\" typeface=\"Arial\"/>\u003ca:font script=\"Bugi\" typeface=\"Leelawadee UI\"/>\u003ca:font script=\"Bopo\" typeface=\"Microsoft JhengHei\"/>\u003ca:font script=\"Java\" typeface=\"Javanese Text\"/>\u003ca:font script=\"Lisu\" typeface=\"Segoe UI\"/>\u003ca:font script=\"Mymr\" typeface=\"Myanmar Text\"/>\u003ca:font script=\"Nkoo\" typeface=\"Ebrima\"/>\u003ca:font script=\"Olck\" typeface=\"Nirmala UI\"/>\u003ca:font script=\"Osma\" typeface=\"Ebrima\"/>\u003ca:font script=\"Phag\" typeface=\"Phagspa\"/>\u003ca:font script=\"Syrn\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Syrj\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Syre\" typeface=\"Estrangelo Edessa\"/>\u003ca:font script=\"Sora\" typeface=\"Nirmala UI\"/>\u003ca:font script=\"Tale\" typeface=\"Microsoft Tai Le\"/>\u003ca:font script=\"Talu\" typeface=\"Microsoft New Tai Lue\"/>\u003ca:font script=\"Tfng\" typeface=\"Ebrima\"/>\u003c/a:minorFont>\u003c/a:fontScheme>\u003ca:fmtScheme name=\"Стандартная\">\u003ca:fillStyleLst>\u003ca:solidFill>\u003ca:schemeClr val=\"phClr\"/>\u003c/a:solidFill>\u003ca:gradFill rotWithShape=\"1\">\u003ca:gsLst>\u003ca:gs pos=\"0\">\u003ca:schemeClr val=\"phClr\">\u003ca:lumMod val=\"110000\"/>\u003ca:satMod val=\"105000\"/>\u003ca:tint val=\"67000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003ca:gs pos=\"50000\">\u003ca:schemeClr val=\"phClr\">\u003ca:lumMod val=\"105000\"/>\u003ca:satMod val=\"103000\"/>\u003ca:tint val=\"73000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003ca:gs pos=\"100000\">\u003ca:schemeClr val=\"phClr\">\u003ca:lumMod val=\"105000\"/>\u003ca:satMod val=\"109000\"/>\u003ca:tint val=\"81000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003c/a:gsLst>\u003ca:lin ang=\"5400000\" scaled=\"0\"/>\u003c/a:gradFill>\u003ca:gradFill rotWithShape=\"1\">\u003ca:gsLst>\u003ca:gs pos=\"0\">\u003ca:schemeClr val=\"phClr\">\u003ca:satMod val=\"103000\"/>\u003ca:lumMod val=\"102000\"/>\u003ca:tint val=\"94000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003ca:gs pos=\"50000\">\u003ca:schemeClr val=\"phClr\">\u003ca:satMod val=\"110000\"/>\u003ca:lumMod val=\"100000\"/>\u003ca:shade val=\"100000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003ca:gs pos=\"100000\">\u003ca:schemeClr val=\"phClr\">\u003ca:lumMod val=\"99000\"/>\u003ca:satMod val=\"120000\"/>\u003ca:shade val=\"78000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003c/a:gsLst>\u003ca:lin ang=\"5400000\" scaled=\"0\"/>\u003c/a:gradFill>\u003c/a:fillStyleLst>\u003ca:lnStyleLst>\u003ca:ln w=\"6350\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\">\u003ca:solidFill>\u003ca:schemeClr val=\"phClr\"/>\u003c/a:solidFill>\u003ca:prstDash val=\"solid\"/>\u003ca:miter lim=\"800000\"/>\u003c/a:ln>\u003ca:ln w=\"12700\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\">\u003ca:solidFill>\u003ca:schemeClr val=\"phClr\"/>\u003c/a:solidFill>\u003ca:prstDash val=\"solid\"/>\u003ca:miter lim=\"800000\"/>\u003c/a:ln>\u003ca:ln w=\"19050\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\">\u003ca:solidFill>\u003ca:schemeClr val=\"phClr\"/>\u003c/a:solidFill>\u003ca:prstDash val=\"solid\"/>\u003ca:miter lim=\"800000\"/>\u003c/a:ln>\u003c/a:lnStyleLst>\u003ca:effectStyleLst>\u003ca:effectStyle>\u003ca:effectLst/>\u003c/a:effectStyle>\u003ca:effectStyle>\u003ca:effectLst/>\u003c/a:effectStyle>\u003ca:effectStyle>\u003ca:effectLst>\u003ca:outerShdw blurRad=\"57150\" dist=\"19050\" dir=\"5400000\" algn=\"ctr\" rotWithShape=\"0\">\u003ca:srgbClr val=\"000000\">\u003ca:alpha val=\"63000\"/>\u003c/a:srgbClr>\u003c/a:outerShdw>\u003c/a:effectLst>\u003c/a:effectStyle>\u003c/a:effectStyleLst>\u003ca:bgFillStyleLst>\u003ca:solidFill>\u003ca:schemeClr val=\"phClr\"/>\u003c/a:solidFill>\u003ca:solidFill>\u003ca:schemeClr val=\"phClr\">\u003ca:tint val=\"95000\"/>\u003ca:satMod val=\"170000\"/>\u003c/a:schemeClr>\u003c/a:solidFill>\u003ca:gradFill rotWithShape=\"1\">\u003ca:gsLst>\u003ca:gs pos=\"0\">\u003ca:schemeClr val=\"phClr\">\u003ca:tint val=\"93000\"/>\u003ca:satMod val=\"150000\"/>\u003ca:shade val=\"98000\"/>\u003ca:lumMod val=\"102000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003ca:gs pos=\"50000\">\u003ca:schemeClr val=\"phClr\">\u003ca:tint val=\"98000\"/>\u003ca:satMod val=\"130000\"/>\u003ca:shade val=\"90000\"/>\u003ca:lumMod val=\"103000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003ca:gs pos=\"100000\">\u003ca:schemeClr val=\"phClr\">\u003ca:shade val=\"63000\"/>\u003ca:satMod val=\"120000\"/>\u003c/a:schemeClr>\u003c/a:gs>\u003c/a:gsLst>\u003ca:lin ang=\"5400000\" scaled=\"0\"/>\u003c/a:gradFill>\u003c/a:bgFillStyleLst>\u003c/a:fmtScheme>\u003c/a:themeElements>\u003ca:objectDefaults/>\u003ca:extraClrSchemeLst/>\u003ca:extLst>\u003ca:ext uri=\"{05A4C25C-085E-4340-85A3-A5531E510DB2}\">\u003cthm15:themeFamily xmlns:thm15=\"http://schemas.microsoft.com/office/thememl/2012/main\" name=\"Office Theme\" id=\"{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}\" vid=\"{4A3C46E8-61CC-4603-A589-7422A47A8E4A}\"/>\u003c/a:ext>\u003c/a:extLst>\u003c/a:theme>"};
+
+function createExecutionActWorkbook(act) {
+  const template = executionActTemplate;
+  const header = act.header;
+  const company = 'ООО ИСК «Русич»';
+  const customer = header.side === 'sub' ? company : header.party;
+  const contractor = header.side === 'sub' ? header.party : company;
+  const fmtDate = date => date.split('-').reverse().join('.');
+  const fixed = {
+    C9: customer, C11: contractor, C13: header.object, C15: header.scope || header.object,
+    H17: header.contractNumber, H18: fmtDate(header.contractDate), G23: act.number, H23: fmtDate(act.date),
+    I23: fmtDate(header.start), J23: fmtDate(header.end),
+    A25: 'Смета № ' + header.estimateId + (act.status === 'draft' ? ' · Черновик' : ''),
+    D26: header.contractAmount / 100000
+  };
+  const xml = value => esc(String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g, ''));
+  const cell = (ref, style, value, formula) => {
+    const tag = '<c r="' + ref + '" s="' + style + '"';
+    if (formula) return tag + '><f>' + xml(formula) + '</f><v>' + value + '</v></c>';
+    if (typeof value === 'number') return tag + '><v>' + value + '</v></c>';
+    return value ? tag + ' t="inlineStr"><is><t xml:space="preserve">' + xml(value) + '</t></is></c>' : tag + '/>';
+  };
+  const row = (index, height, entries) => '<row r="' + index + '" ht="' + height + '" customHeight="1">' +
+    entries.map(([column, style, value, formula]) => cell(column + index, style, value, formula)).join('') + '</row>';
+  const merges = [...template.merges];
+  const rows = template.rows.map(([number, height, entries]) => {
+    const cells = entries.map(([column, style, value]) => {
+      const ref = column + number;
+      return [column, style, Object.hasOwn(fixed, ref) ? fixed[ref] : value];
+    });
+    for (const [ref, value] of Object.entries(fixed)) {
+      if (ref.slice(1) === String(number) && !cells.some(cell => cell[0] === ref[0])) cells.push([ref[0], 0, value]);
+    }
+    cells.sort((a, b) => a[0].localeCompare(b[0]));
+    return row(number, [9,11,13,15].includes(number) ?
+      Math.max(height, 14 * Math.ceil(String(fixed['C' + number]).length / 78)) : height, cells);
+  });
+  let number = 31;
+  const vatReferences = [];
+  for (const [index, line] of act.lines.entries()) {
+    number++;
+    merges.push('C' + number + ':E' + number);
+    if (line.vatEligible) vatReferences.push('J' + number);
+    rows.push(row(number, Math.max(25, 15 * Math.ceil(line.name.length / 50)), [
+      ['A',12,index+1], ['B',12,line.number], ['C',13,line.name], ['D',13,null], ['E',13,null],
+      ['F',13,'Договорная цена'], ['G',12,line.unit], ['H',template.volume,line.quantity],
+      ['I',template.money,line.price], ['J',template.money,line.amount/100,'ROUND(H' + number + '*I' + number + ',2)']
+    ]));
+  }
+  const finish = number;
+  function summary(label, value, formula) {
+    number++;
+    merges.push('A' + number + ':I' + number);
+    rows.push(row(number, 24, [['A',13,label],['J',template.money,value,formula]]));
+    return 'J' + number;
+  }
+  const subtotal = summary('Всего по позициям', act.subtotal / 100, 'SUM(J32:J' + finish + ')');
+  const basis = Math.round(header.rate * 100);
+  const inputVat = header.vatMode === 'included';
+  const vatFormula = inputVat ? 'ROUND(' + subtotal + '*' + basis + '/' + (10000+basis) + ',2)' :
+    vatReferences.length ? 'ROUND((' + vatReferences.join('+') + ')*' + basis + '/10000,2)' : null;
+  const vat = summary(header.vatMode === 'none' ? 'Без НДС' :
+    (inputVat ? 'В том числе НДС ' : 'НДС ') + quantity(header.rate) + '%', act.vat / 100, vatFormula);
+  summary('ВСЕГО по акту', act.total / 100, inputVat ? subtotal : subtotal + '+' + vat);
+  for (const label of ['Сдал: ' + contractor + ' __________________________', 'Принял: ' + customer + ' __________________________']) {
+    number += 2;
+    merges.push('A' + number + ':J' + number);
+    rows.push(row(number, 27, [['A',87,label]]));
+  }
+  const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const doc = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const pkg = 'http://schemas.openxmlformats.org/package/2006';
+  const rel = (id, type, target) => '<Relationship Id="' + id + '" Type="' + doc + '/' + type + '" Target="' + target + '"/>';
+  const rels = (...items) => '<Relationships xmlns="' + pkg + '/relationships">' + items.join('') + '</Relationships>';
+  const type = (path, kind) => '<Override PartName="/xl/' + path + '" ContentType="application/vnd.openxmlformats-officedocument.' + kind + '+xml"/>';
+  return zipEstimateParts({
+    '[Content_Types].xml': '<Types xmlns="' + pkg + '/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' + type('workbook.xml','spreadsheetml.sheet.main') +
+      type('worksheets/sheet1.xml','spreadsheetml.worksheet') + type('styles.xml','spreadsheetml.styles') + type('theme/theme1.xml','theme') + '</Types>',
+    '_rels/.rels': rels(rel('rId1','officeDocument','xl/workbook.xml')),
+    'xl/workbook.xml': '<workbook xmlns="' + ns + '" xmlns:r="' + doc + '"><bookViews><workbookView/></bookViews>' +
+      '<sheets><sheet name="КС-2" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">\'КС-2\'!$A$1:$J$' +
+      number + '</definedName><definedName name="_xlnm.Print_Titles" localSheetId="0">\'КС-2\'!$28:$31</definedName></definedNames>' +
+      '<calcPr fullCalcOnLoad="1"/></workbook>',
+    'xl/_rels/workbook.xml.rels': rels(rel('rId1','worksheet','worksheets/sheet1.xml'),rel('rId2','styles','styles.xml'),rel('rId3','theme','theme/theme1.xml')),
+    'xl/worksheets/sheet1.xml': '<worksheet xmlns="' + ns + '"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>' +
+      '<dimension ref="A1:J' + number + '"/><sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews>' +
+      '<sheetFormatPr defaultRowHeight="15"/><cols>' + template.cols.map((width, i) =>
+        '<col min="' + (i+1) + '" max="' + (i+1) + '" width="' + width + '" customWidth="1"/>').join('') +
+      '</cols><sheetData>' + rows.join('') + '</sheetData><mergeCells count="' + merges.length + '">' +
+      merges.map(ref => '<mergeCell ref="' + ref + '"/>').join('') + '</mergeCells>' +
+      '<pageMargins left="0.35" right="0.35" top="0.35" bottom="0.35" header="0.15" footer="0.15"/>' +
+      '<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>',
+    'xl/styles.xml': template.styles,
+    'xl/theme/theme1.xml': template.theme
+  });
+}
+
+function downloadExecutionAct(act) {
+  const url = URL.createObjectURL(createExecutionActWorkbook(act));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'КС-2 № ' + act.number.replace(/[<>:"/\\|?*]/g, '_') + '.xlsx';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+const workExecution = (() => {
+  const blank = () => ({ contracts: [], reports: [], acts: [] });
+  const selected = { object: '', contract: '', report: '' };
+  const units = value => Math.round(value * 1e6) / 1e6;
+  const paidStates = ['Не оплачено', 'Частично оплачено', 'Оплачено'];
+  const vatModes = { none: 'Без НДС', add: 'Начислить НДС сверху', included: 'НДС включён в цену', estimate: 'Как в смете заказчика' };
+  const option = (value, label, current) => '<option value="' + esc(value) + '"' +
+    (value === current ? ' selected' : '') + '>' + esc(label) + '</option>';
+  const field = (name, label, value = '', type = 'text', required = true, extra = '') =>
+    '<label>' + esc(label) + '<input name="' + name + '" type="' + type + '" value="' + esc(value) + '"' +
+    (required ? ' required' : '') + extra + '></label>';
+  const button = label => '<button class="btn primary" type="submit">' + label + '</button>';
+  const form = (action, content) => '<form class="execution-form" data-exec-action="' + action + '">' + content + '</form>';
+  const group = (title, content) => '<details class="panel execution-box"><summary>' + title + '</summary>' + content + '</details>';
+  const formatDate = date => /^\d{4}-\d{2}-\d{2}$/.test(date ?? '') ? date.split('-').reverse().join('.') : date ?? '';
+  const periodLabel = report => formatDate(report.start) + ' — ' + formatDate(report.end);
+  const id = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  const ok = (condition, message) => { if (!condition) throw new Error(message); };
+  const sum = values => units(values.reduce((total, value) => total + value, 0));
+  const signedActs = (data, contractId) => data.acts.filter(act => act.contractId === contractId && act.status === 'signed')
+    .sort((left, right) => left.signedAt.localeCompare(right.signedAt));
+  const actLine = (act, itemId) => act.lines.find(line => line.itemId === itemId);
+  const actQuantity = (act, itemId) => actLine(act, itemId)?.quantity ?? 0;
+  const reportAccepted = (data, report, itemId) => sum(signedActs(data, report.contractId)
+    .filter(act => act.reportId === report.id).map(act => actQuantity(act, itemId)));
+
+  function quantities(data, contract, report, item, currentAct) {
+    const accepted = signedActs(data, contract.id);
+    const cumulative = sum(accepted.map(act => actQuantity(act, item.id)));
+    const inPeriod = report ? reportAccepted(data, report, item.id) : 0;
+    const entry = report?.items[item.id];
+    const previous = currentAct ? sum(accepted.slice(0, accepted.findIndex(act => act.id === currentAct.id))
+      .map(act => actQuantity(act, item.id))) :
+      units(cumulative - inPeriod);
+    return { cumulative, previous, inPeriod,
+      remaining: units(item.volume - cumulative),
+      pending: units(Math.max(0, (entry?.submitted ?? 0) - inPeriod)),
+      available: units(Math.max(0, Math.min((entry?.verified ?? 0) - inPeriod, item.volume - cumulative))),
+      excess: units(Math.max(0, cumulative - inPeriod + (entry?.submitted ?? inPeriod) - item.volume))
+    };
+  }
+
+  function snapshot(estimate, contract, report, act) {
+    const signed = act.status === 'signed';
+    if (signed) return act;
+    const lines = act.lines.map(line => {
+      const item = contract.items.find(item => item.id === line.itemId);
+      ok(item, 'Позиция акта отсутствует в договорной смете.');
+      return { ...line, number: item.number, name: item.name, unit: item.unit, price: item.price,
+        amount: lineAmountCents(line.quantity, item.price),
+        vatEligible: contract.vatMode === 'add' || (contract.vatMode === 'estimate' && addsEstimateVat(item.category)) };
+    });
+    const subtotal = lines.reduce((amount, line) => amount + line.amount, 0);
+    const base = lines.reduce((amount, line) => amount + (line.vatEligible ? line.amount : 0), 0);
+    const basisPoints = Math.round(contract.rate * 100);
+    const vat = contract.vatMode === 'included' ? Math.round(subtotal * basisPoints / (10000 + basisPoints)) :
+      Math.round(base * basisPoints / 10000);
+    return { ...act, lines, subtotal, vat, total: subtotal + (contract.vatMode === 'included' ? 0 : vat),
+      header: { object: estimate.name, scope: estimate.scope, estimateId: estimate.id,
+        contractAmount: contract.items.reduce((total, item) => total + lineAmountCents(item.volume, item.price), 0),
+        party: contract.party, side: contract.side,
+        contractNumber: contract.number, contractDate: contract.date, start: report.start, end: report.end,
+        vatMode: contract.vatMode, rate: contract.rate }
+    };
+  }
+
+  function contractFields(contract) {
+    return '<div class="fields">' +
+      field('party', contract.side === 'customer' ? 'Заказчик' : 'Субподрядчик', contract.party) +
+      field('number', 'Номер договора', contract.number) + field('date', 'Дата договора', contract.date, 'date') +
+      '<label>Как учитывать НДС<select name="vatMode">' + Object.entries(vatModes).filter(([key]) => key !== 'estimate' || contract.side === 'customer')
+        .map(([key, label]) => option(key, label, contract.vatMode)).join('') + '</select></label>' +
+      field('rate', 'Ставка НДС, %', contract.rate ?? 0, 'number', true, ' min="0" max="100" step="0.01"') + '</div>';
+  }
+
+  function positionForms(data, contract) {
+    const options = contract.items.map(item => option(item.id, item.number + ' · ' + item.name)).join('');
+    const positions = contract.side === 'sub' ? group('Добавить позицию договорной сметы',
+      form('item', '<div class="fields">' + field('number', '№ позиции', contract.items.length + 1) +
+        field('name', 'Наименование') + field('unit', 'Ед. изм.') + field('volume', 'Договорной объём') +
+        field('price', 'Договорная цена за единицу, ₽') + '</div>' + button('Добавить позицию'))) : '';
+    const revisions = options ? group('Дополнительные соглашения', form('amend', '<div class="fields">' +
+      field('number', 'Номер допсоглашения') + field('date', 'Дата допсоглашения', '', 'date') +
+      '<label>Позиция<select name="itemId" required>' + options + '</select></label>' +
+      field('volume', 'Новый договорной объём') + field('price', 'Новая цена, ₽', '', 'text', false) +
+      '</div>' + button('Применить допсоглашение')) +
+      (contract.amendments.length ? table(['Допсоглашение', 'Позиция', 'Изменение объёма', 'Цена, ₽'], contract.amendments.map(amend =>
+        '<tr><td>' + esc(amend.number) + ' от ' + formatDate(amend.date) + '</td><td>' + esc(amend.itemName) +
+        '</td><td>' + quantity(amend.oldVolume) + ' → ' + quantity(amend.volume) + '</td><td>' + money(amend.price) + '</td></tr>')) : '')) : '';
+    const customer = data.contracts.find(contract => contract.side === 'customer');
+    const mapping = contract.side === 'sub' && options && customer?.items.length ? group('Связать позиции с договором заказчика',
+      form('link', '<div class="fields"><label>Позиция субподрядчика<select name="itemId">' + options +
+      '</select></label><label>Позиция заказчика<select name="customerItem" required>' +
+      customer.items.map(item => option(item.id, item.number + ' · ' + item.name + ' (' + item.unit + ')')).join('') + '</select></label>' +
+      field('area', 'Участок или этап', '', 'text', false) + field('factor', 'Объём заказчика на 1 ед. субподрядчика', '', 'text', false, ' placeholder="1 для одинаковых единиц"') +
+      '</div>' + button('Подтвердить привязку')) +
+      table(['Субподрядчик', 'Заказчик', 'Участок', 'Коэффициент'], contract.items.filter(item => item.link).map(item =>
+        '<tr><td>' + esc(item.name) + '</td><td>' + esc(customer.items.find(row => row.id === item.link.customerItem)?.name) +
+        '</td><td>' + esc(item.link.area) + '</td><td>' + quantity(item.link.factor) + '</td></tr>'), 'Привязок пока нет.')) : '';
+    return positions + revisions + mapping;
+  }
+
+  function reportViews(data, contract, report, selectedAct) {
+    const reportList = data.reports.filter(report => report.contractId === contract.id);
+    const create = group('Добавить отчётный период', form('report', '<div class="fields">' +
+      field('start', 'Начало периода', '', 'date') + field('end', 'Конец периода', '', 'date') +
+      '</div>' + button('Добавить период')));
+    if (!report) return create;
+    const reportForm = form('quantities', table(
+      ['Позиция', 'Договорной объём', 'Выполнено за период', 'Предъявлено', 'Проверено', 'Принято по текущему акту',
+        'Принято ранее', 'Принято всего', 'Остаток', 'Ждёт приёмки', 'Комментарий'],
+      contract.items.map((item, index) => {
+        const entry = report.items[item.id] ?? {};
+        const figures = quantities(data, contract, report, item, selectedAct?.status === 'signed' ? selectedAct : null);
+        const edit = key => field(key + index, key === 'comment' ? 'Комментарий' : 'Объём', entry[key] ?? '', 'text', false);
+        return '<tr><td><strong>' + esc(item.number + ' · ' + item.name) + '</strong><span class="secondary">' + esc(item.unit) +
+          ' · ' + money(item.price) + '/ед.</span>' + (figures.excess > 0 ? '<span class="pill wait">Превышение ' +
+          quantity(figures.excess) + ' ' + esc(item.unit) + '</span>' : '') +
+          '</td><td class="num">' + quantity(item.volume) + '</td><td>' + edit('actual') + '</td><td>' + edit('submitted') +
+          '</td><td>' + edit('verified') + '</td><td class="num">' +
+          quantity(selectedAct?.status === 'signed' ? actQuantity(selectedAct, item.id) : null) + '</td><td class="num">' +
+          quantity(figures.previous) + '</td><td class="num">' + quantity(figures.cumulative) + '</td><td class="num">' +
+          quantity(figures.remaining) + '</td><td class="num">' +
+          quantity(figures.pending) + '</td><td>' + edit('comment') + '</td></tr>';
+      }), 'Добавьте позиции в договорную смету.') + (contract.items.length ? button('Сохранить выполнение') : ''));
+    return create + '<section class="panel execution-box"><div class="positions-head"><h2>Выполнение за период</h2>' +
+      '<label>Отчётный период <select id="execution-report">' + reportList.map(item => option(item.id, periodLabel(item), report.id)).join('') +
+      '</select></label></div>' + reportForm + '</section>';
+  }
+
+  function actViews(estimate, data, contract, report, act) {
+    if (!report) return '';
+    const acts = data.acts.filter(item => item.reportId === report.id);
+    const draft = acts.find(item => item.status === 'draft');
+    const available = contract.items.filter(item => quantities(data, contract, report, item).available > 0);
+    const create = !draft && available.length ? group('Собрать черновик КС-2', form('draft', '<div class="fields">' +
+      field('number', 'Номер акта') + field('date', 'Дата акта', report.end, 'date') + '</div>' + button('Создать черновик'))) : '';
+    let detail = '';
+    if (act) {
+      const view = snapshot(estimate, contract, report, act);
+      if (act.status === 'draft') {
+        const candidates = contract.items.filter(item => available.includes(item) || actQuantity(act, item.id) > 0);
+        detail = form('act-lines', table(['Позиция', 'Доступно к включению', 'Объём в акте', 'Цена за ед., ₽'], candidates.map(item =>
+          '<tr><td>' + esc(item.number + ' · ' + item.name) + '</td><td>' + quantity(quantities(data, contract, report, item).available) +
+          ' ' + esc(item.unit) + '</td><td>' + field('v-' + item.id, 'Объём в акте', actQuantity(act, item.id), 'text', false) +
+          '</td><td>' + money(item.price) + '</td></tr>'), 'Нет проверенных объёмов в пределах договора.') +
+          button('Сохранить объёмы акта'));
+      } else {
+        detail = table(['Позиция', 'Объём в акте', 'Цена за ед., ₽', 'Сумма, ₽'], view.lines.map(line =>
+          '<tr><td>' + esc(line.number + ' · ' + line.name) + '</td><td>' + quantity(line.quantity) + ' ' + esc(line.unit) +
+          '</td><td>' + money(line.price) + '</td><td>' + money(line.amount / 100) + '</td></tr>'));
+      }
+      detail += '<p><strong>По позициям ' + money(view.subtotal / 100) + ' · НДС ' + money(view.vat / 100) +
+        ' · К оплате по акту ' + money(view.total / 100) + '</strong></p>' +
+        (act.status === 'draft' && act.lines.length ? form('sign', button('Отметить как подписанный')) : '') +
+        (act.lines.length ? '<button class="btn" type="button" id="execution-download-act">Выгрузить КС-2 в Excel</button>' : '') +
+        (act.status === 'signed' ? form('payment', '<label>Оплата<select name="payment">' +
+          paidStates.map(state => option(state, state, act.payment)).join('') + '</select></label>' + button('Сохранить статус оплаты')) : '');
+    }
+    return '<section class="panel execution-box"><div class="positions-head"><h2>Акты КС-2</h2>' +
+      (acts.length ? '<label>Текущий акт <select id="execution-act">' + acts.map(item =>
+        option(item.id, '№ ' + item.number + ' · ' + (item.status === 'signed' ? 'Подписан' : 'Черновик'), act?.id)).join('') +
+        '</select></label>' : '') + '</div>' + create + detail + '</section>';
+  }
+
+  function objectSummary(data) {
+    const customer = data.contracts.find(contract => contract.side === 'customer');
+    const sub = data.contracts.filter(contract => contract.side === 'sub');
+    const amount = acts => money(acts.reduce((total, act) => total + act.total, 0) / 100);
+    const signed = data.acts.filter(act => act.status === 'signed');
+    const summary = '<p><strong>Принято у субподрядчиков ' + amount(signed.filter(act => act.header.side === 'sub')) +
+      ' · Сдано заказчику ' + amount(signed.filter(act => act.header.side === 'customer')) + '</strong></p>';
+    if (!customer?.items.length) return summary + '<p class="note">Добавьте договор заказчика для сверки связанных позиций.</p>';
+    return summary + table(['Позиция заказчика', 'Выполнено субподрядчиками', 'Принято у субподрядчиков', 'Сдано заказчику', 'Принято, ещё предстоит сдать',
+      'Стоимость по позициям субподрядчиков', 'Стоимость по позиции заказчика'],
+      customer.items.map(item => {
+      let fact = null;
+        let accepted = 0;
+        let incoming = 0;
+        for (const contract of sub) {
+          for (const linked of contract.items.filter(source => source.link?.customerItem === item.id)) {
+            const measured = data.reports.filter(report => report.contractId === contract.id)
+              .map(report => report.items[linked.id]?.actual).filter(value => value != null);
+            if (measured.length) fact = (fact ?? 0) + sum(measured) * linked.link.factor;
+            const lines = signedActs(data, contract.id).map(act => actLine(act, linked.id)).filter(Boolean);
+            accepted += sum(lines.map(line => line.quantity)) * linked.link.factor;
+            incoming += lines.reduce((total, line) => total + line.amount, 0);
+          }
+        }
+        const outgoing = signedActs(data, customer.id).map(act => actLine(act, item.id)).filter(Boolean);
+        const submitted = sum(outgoing.map(line => line.quantity));
+        return '<tr><td>' + esc(item.number + ' · ' + item.name) + '<span class="secondary">' + esc(item.unit) +
+          '</span></td><td>' + quantity(fact == null ? null : units(fact)) + '</td><td>' + quantity(units(accepted)) + '</td><td>' + quantity(submitted) +
+          '</td><td>' + quantity(units(Math.max(0, accepted - submitted))) + '</td><td>' + money(incoming / 100) +
+          '</td><td>' + money(outgoing.reduce((total, line) => total + line.amount, 0) / 100) + '</td></tr>';
+      }));
+  }
+
+  const changes = {
+    contract(data, context, read) {
+      const side = read('side');
+      ok(side === 'sub' || side === 'customer', 'Выберите сторону договора.');
+      const contract = { id: id(), side, items: [], amendments: [] };
+      changes.terms(data, { ...context, contract }, read);
+      if (side === 'customer') {
+        ok(!data.contracts.some(item => item.side === 'customer'), 'Договор заказчика уже создан.');
+        ok(context.estimate.rows.length && estimateStatus(context.estimate) === 'Готова',
+          'Завершите смету заказчика перед переносом договорных позиций.');
+        contract.items = orderedGroups(context.estimate).flatMap(groupRows).map((row, index) => ({
+          id: row.id, number: String(index + 1), name: row.name, category: row.category,
+          unit: row.unit, volume: row.volume, price: row.customerPrice
+        }));
+      }
+      data.contracts.push(contract);
+      return { contract: contract.id, report: '', act: '' };
+    },
+    terms(data, { contract }, read) {
+      const vatMode = read('vatMode');
+      ok(Object.hasOwn(vatModes, vatMode) && (vatMode !== 'estimate' || contract.side === 'customer'), 'Укажите режим НДС.');
+      const rate = vatMode === 'none' ? 0 : numeric(read('rate'), 100, 'Ставка НДС');
+      Object.assign(contract, { party: required(read('party'), 'Название стороны'), number: required(read('number'), 'Номер договора'),
+        date: date(read('date')), vatMode, rate });
+    },
+    item(data, { contract }, read) {
+      const number = required(read('number'), 'Номер позиции');
+      ok(contract.side === 'sub' && !contract.items.some(item => item.number === number), 'Номер позиции должен быть уникальным.');
+      contract.items.push({ id: id(), number, name: required(read('name'), 'Наименование'),
+        unit: required(read('unit'), 'Единица измерения'), volume: numeric(read('volume')), price: numeric(read('price')) });
+    },
+    amend(data, { contract }, read) {
+      const item = contract.items.find(row => row.id === read('itemId'));
+      ok(item, 'Выберите позицию договора.');
+      const volume = numeric(read('volume'));
+      const price = read('price') ? numeric(read('price')) : item.price;
+      const number = required(read('number'), 'Номер допсоглашения');
+      const signedDate = date(read('date'));
+      ok(!contract.amendments.some(entry => entry.itemId === item.id && entry.number === number && entry.date === signedDate),
+        'Это допсоглашение уже учтено для позиции.');
+      const previous = contract.amendments.filter(entry => entry.itemId === item.id).at(-1);
+      ok(signedDate >= (previous?.date ?? contract.date), 'Дата допсоглашения должна быть не раньше договора и последнего изменения позиции.');
+      contract.amendments.push({ number, date: signedDate, itemId: item.id, itemName: item.name,
+        oldVolume: item.volume, oldPrice: item.price, volume, price });
+      Object.assign(item, { volume, price });
+    },
+    link(data, { contract }, read) {
+      const item = contract.items.find(row => row.id === read('itemId'));
+      const customer = data.contracts.find(row => row.side === 'customer');
+      const target = customer?.items.find(row => row.id === read('customerItem'));
+      ok(contract.side === 'sub' && item && target, 'Выберите обе позиции.');
+      ok(item.unit === target.unit || read('factor'), 'Для разных единиц измерения введите коэффициент пересчёта.');
+      const factor = read('factor') ? numeric(read('factor')) : 1;
+      ok(factor > 0, 'Коэффициент должен быть больше нуля.');
+      item.link = { customerItem: target.id, area: read('area'), factor };
+    },
+    report(data, { contract }, read) {
+      const start = date(read('start')), end = date(read('end'));
+      ok(start <= end, 'Дата окончания должна быть не раньше даты начала.');
+      ok(!data.reports.some(report => report.contractId === contract.id && report.start <= end && report.end >= start),
+        'Период пересекается с уже внесённым. Откройте существующий период.');
+      const report = { id: id(), contractId: contract.id, start, end, items: {} };
+      data.reports.push(report);
+      return { report: report.id, act: '' };
+    },
+    quantities(data, { contract, report }, read) {
+      for (const [index, item] of contract.items.entries()) {
+        const submitted = numeric(read('submitted' + index) || '0');
+        const actualText = read('actual' + index);
+        const actual = actualText ? numeric(actualText) : null;
+        const verified = numeric(read('verified' + index) || '0');
+        const inPeriod = reportAccepted(data, report, item.id);
+        ok(verified <= submitted && (actual == null || submitted <= actual) && verified >= inPeriod,
+          item.name + ' · проверьте, что факт ≥ предъявлено ≥ проверено ≥ принято по актам.');
+        report.items[item.id] = { actual, submitted, verified, comment: read('comment' + index) };
+      }
+    },
+    draft(data, { contract, report }, read) {
+      const number = required(read('number'), 'Номер акта');
+      ok(!data.acts.some(act => act.contractId === contract.id &&
+        (act.number === number || (act.reportId === report.id && act.status === 'draft'))), 'Такой номер или черновик за период уже существует.');
+      ok(contract.items.some(item => quantities(data, contract, report, item).available > 0), 'Нет проверенных объёмов к включению.');
+      const act = { id: id(), contractId: contract.id, reportId: report.id, number, date: date(read('date')), status: 'draft', lines: [] };
+      data.acts.push(act);
+      return { act: act.id };
+    },
+    'act-lines'(data, { contract, report, act }, read) {
+      ok(act.status === 'draft', 'Эта операция доступна для черновика.');
+      act.lines = contract.items.flatMap(item => {
+        const volume = numeric(read('v-' + item.id) || '0');
+        if (!volume) return [];
+        checkActVolume(data, contract, report, item, volume);
+        return [{ itemId: item.id, quantity: volume }];
+      });
+    },
+    sign(data, { estimate, contract, report, act }) {
+      ok(act.status === 'draft' && act.lines.length, 'Сохраните объёмы черновика.');
+      for (const line of act.lines) {
+        const item = contract.items.find(item => item.id === line.itemId);
+        checkActVolume(data, contract, report, item, line.quantity);
+      }
+      Object.assign(act, snapshot(estimate, contract, report, act), {
+        status: 'signed', signedAt: new Date().toISOString(), payment: paidStates[0]
+      });
+    },
+    payment(data, { act }, read) {
+      ok(act.status === 'signed' && paidStates.includes(read('payment')), 'Укажите статус оплаты подписанного акта.');
+      act.payment = read('payment');
+    }
+  };
+
+  function required(value, label) {
+    ok(value, 'Заполните поле «' + label + '».');
+    return value;
+  }
+
+  function date(value) {
+    ok(/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) &&
+      new Date(value).toISOString().slice(0, 10) === value, 'Укажите корректную дату.');
+    return value;
+  }
+
+  function numeric(value, max = 100000000, label = 'Объём или цена') {
+    const number = readEstimateNumber(value);
+    ok(Number.isFinite(number) && number >= 0 && number <= max, label + ' · введите число от 0 до ' + max + '.');
+    return units(number);
+  }
+
+  function checkActVolume(data, contract, report, item, volume) {
+    const available = quantities(data, contract, report, item).available;
+    ok(volume <= available, item.name + ' · превышение доступного объёма на ' + quantity(units(volume - available)) + ' ' + item.unit + '.');
+  }
+
+  function render(estimate) {
+    crumb.innerHTML = '<a href="#execution">Выполнение работ</a>' + (estimate ? '<span> / № ' + esc(estimate.id) + '</span>' : '');
+    if (!estimate) {
+      main.innerHTML = '<div class="heading"><h1>Выполнение работ</h1></div><section class="panel execution-box">' +
+        table(['Объект', 'Смета', 'Договоры выполнения'], estimates.map(item =>
+          '<tr><td><a class="text-btn" href="#execution/' + encodeURIComponent(item.id) + '">' + esc(item.name) +
+          '</a></td><td>№ ' + esc(item.id) + '</td><td>' + (item.execution?.contracts.length ?? 0) + '</td></tr>'), 'Сначала добавьте смету объекта.') +
+        '</section>';
+      return;
+    }
+    if (selected.object !== estimate.id) Object.assign(selected, { object: estimate.id, contract: '', report: '', act: '' });
+    const data = estimate.execution ?? blank();
+    const contract = data.contracts.find(item => item.id === selected.contract) ?? data.contracts[0];
+    const reports = data.reports.filter(item => item.contractId === contract?.id);
+    const report = reports.find(item => item.id === selected.report) ?? reports.at(-1);
+    const acts = data.acts.filter(item => item.reportId === report?.id);
+    const act = acts.find(item => item.id === selected.act) ?? acts.at(-1);
+    const customer = data.contracts.find(item => item.side === 'customer');
+    const ready = estimate.rows.length && estimateStatus(estimate) === 'Готова';
+    const addContract = (side, title, defaultVat) => group(title, form('contract',
+      '<input type="hidden" name="side" value="' + side + '">' + contractFields({
+        side, party: side === 'customer' ? estimate.client ?? '' : '', number: '', date: '',
+        vatMode: defaultVat, rate: side === 'customer' ? estimate.vatRate ?? 0 : 0
+      }) + button('Сохранить договор')));
+    main.innerHTML = '<div class="heading"><div><p class="eyebrow">Выполнение работ</p><h1>' + esc(estimate.name) +
+      '</h1></div><a class="btn" href="#estimate/' + encodeURIComponent(estimate.id) + '">К смете</a></div>' +
+      '<div class="execution-layout"><section class="panel execution-box"><h2>Договоры объекта</h2>' +
+      (contract ? '<label>Договор <select id="execution-contract">' + data.contracts.map(item =>
+        option(item.id, (item.side === 'sub' ? 'Субподрядчик · ' : 'Заказчик · ') + item.party + ' · № ' + item.number, contract.id)).join('') +
+        '</select></label>' : '') + '</section>' +
+      addContract('sub', 'Добавить субподрядчика', 'none') +
+      (!customer && ready ? addContract('customer', 'Сдача заказчику · создать из согласованной сметы',
+        estimate.vatRate == null ? 'none' : 'estimate') : '') +
+      (!customer && !ready ? '<p class="note">Завершите смету объекта, чтобы создать договор для сдачи заказчику.</p>' : '') +
+      (contract ? group('Реквизиты и НДС договора', form('terms', contractFields(contract) + button('Сохранить реквизиты'))) +
+        positionForms(data, contract) + reportViews(data, contract, report, act) + actViews(estimate, data, contract, report, act) : '') +
+      group('Сводка по объекту', objectSummary(data)) +
+      '<p id="execution-error" class="execution-error" role="alert" hidden></p></div>';
+    const selection = (key, resets) => {
+      const control = main.querySelector('#execution-' + key);
+      if (control) control.onchange = () => {
+        selected[key] = control.value;
+        for (const reset of resets) selected[reset] = '';
+        render(estimate);
+        main.querySelector('#execution-' + key)?.focus({ preventScroll: true });
+      };
+    };
+    selection('contract', ['report', 'act']);
+    selection('report', ['act']);
+    selection('act', []);
+    const download = main.querySelector('#execution-download-act');
+    if (download) download.onclick = () => {
+      try { downloadExecutionAct(snapshot(estimate, contract, report, act)); }
+      catch (error) { displayError(error); }
+    };
+    function displayError(error, element) {
+      const message = main.querySelector('#execution-error');
+      message.hidden = false;
+      message.textContent = error.message;
+      if (element) element.after(message);
+      message.scrollIntoView({ block: 'nearest' });
+    }
+    for (const element of main.querySelectorAll('[data-exec-action]')) {
+      element.onsubmit = event => {
+        event.preventDefault();
+        const action = element.dataset.execAction;
+        const fields = new FormData(element);
+        const read = key => String(fields.get(key) ?? '').trim();
+        const next = structuredClone(data);
+        const context = { estimate, contract: next.contracts.find(item => item.id === contract?.id),
+          report: next.reports.find(item => item.id === report?.id), act: next.acts.find(item => item.id === act?.id) };
+        try {
+          const change = changes[action](next, context, read);
+          const previous = estimate.execution;
+          estimate.execution = next;
+          if (!save()) {
+            estimate.execution = previous;
+            throw new Error('Не удалось сохранить выполнение в браузере. Освободите место и повторите.');
+          }
+          Object.assign(selected, { contract: contract?.id, report: report?.id, act: act?.id }, change);
+          render(estimate);
+          notify(action === 'sign' ? 'Акт отмечен как подписанный. Остатки пересчитаны.' : 'Изменения сохранены.');
+        } catch (error) { displayError(error, element); }
+      };
+    }
+  }
+
+  return { render };
+})();
 
 window.addEventListener('hashchange', () => renderScreen(true));
 renderScreen();
