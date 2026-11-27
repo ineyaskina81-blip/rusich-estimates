@@ -709,7 +709,7 @@ function estimateTotals(estimate) {
   }
   const subtotal = Object.values(amounts).reduce((sum, amount) => sum + amount, 0);
   const rate = estimate.vatRate;
-  const vatBase = amounts['Работы'] + amounts['Прочее'];
+  const vatBase = amounts['Работы'];
   const vat = rate == null ? null : Math.round(vatBase * Math.round(rate * 100) / 10000);
   return { amounts, subtotal, vat, total: vat == null ? null : subtotal + vat, missing };
 }
@@ -731,7 +731,7 @@ function renderEstimateTotals(estimate, totals, groups) {
     line('Всего прочее', amounts['Прочее']) +
     line('ИТОГО по смете до начисления НДС', subtotal) + line(vatLabel, vat) +
     line('ИТОГО с НДС', total) + '</dl>' +
-    '<p class="note">НДС начисляется на работы и прочее.</p>' +
+    '<p class="note">НДС начисляется только на работы. В ценах позиций «Прочее» НДС уже учтён.</p>' +
     '<form class="vat-form" id="estimate-vat-form">' +
       '<label>НДС, %<input name="vatRate" type="number" min="0" max="100" step="0.01" required value="' +
       esc(estimate.vatRate ?? '') + '"></label><button class="btn" type="submit">Сохранить НДС</button></form>' +
