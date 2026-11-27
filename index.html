@@ -426,7 +426,7 @@ const newEstimateDialog = document.querySelector('#new-estimate');
 const estimateForm = document.querySelector('#estimate-form');
 const sectionDialog = document.querySelector('#estimate-section');
 const sectionForm = document.querySelector('#estimate-section-form');
-const listFilters = { query: '', status: 'all' };
+const listFilters = { query: '', status: 'all', removed: false };
 let cardFilters = { query: '', category: 'all', role: 'all' };
 let activeEstimate;
 let sectionFilter = '';
@@ -565,21 +565,27 @@ function table(headers, rows, emptyMessage = 'По этим фильтрам н�
 }
 
 function renderList() {
-  const completed = estimates.filter(estimate => estimateStatus(estimate) === 'Готова').length;
+  const registered = estimates.filter(estimate => !estimate.removedFromRegister);
+  const removed = estimates.filter(estimate => estimate.removedFromRegister);
+  const currentList = listFilters.removed ? removed : registered;
+  const completed = registered.filter(estimate => estimateStatus(estimate) === 'Готова').length;
   crumb.innerHTML = '<span aria-current="page">Сметы</span>';
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Сметный отдел</p><h1>Сметы</h1>' +
     '<p class="subtitle">Создайте смету или откройте её из реестра.</p></div>' +
     '<div class="heading-actions"><a class="btn" href="#execution">Выполнение работ</a>' +
     '<button class="btn primary compact" id="create-estimate" type="button" aria-haspopup="dialog">+ Новая смета</button></div></div>' +
-    '<section class="stats" aria-label="Состояние смет">' + stat('Всего смет', estimates.length) +
-    stat('В работе', estimates.length - completed) + stat('Готовы', completed) + '</section>' +
+    '<section class="stats" aria-label="Состояние смет">' + stat('Всего смет', registered.length) +
+    stat('В работе', registered.length - completed) + stat('Готовы', completed) + '</section>' +
     '<section class="panel" aria-labelledby="list-title"><div class="panel-head"><h2 id="list-title">Реестр смет</h2></div>' +
+    '<div class="tabs" role="group" aria-label="Списки смет"><button class="tab" id="show-active-estimates" type="button" aria-pressed="' +
+    !listFilters.removed + '">Активные (' + registered.length + ')</button><button class="tab" id="show-removed-estimates" type="button" aria-pressed="' +
+    listFilters.removed + '">Удалённые (' + removed.length + ')</button></div>' +
     '<div class="toolbar">' + searchField(listFilters.query, 'Поиск по номеру, объекту или заказчику') +
     filterSelect('status', 'Статус сметы', 'Все статусы', ['В работе', 'Готова'], listFilters.status) +
     '<button class="btn" id="clear" type="button">Сбросить фильтры</button></div><div id="results"></div></section>';
   const draw = () => {
     const query = listFilters.query.trim().toLocaleLowerCase('ru');
-    const visible = estimates.filter(estimate =>
+    const visible = currentList.filter(estimate =>
       [estimate.id, estimate.name, estimate.client].some(value => value.toLocaleLowerCase('ru').includes(query)) &&
       (listFilters.status === 'all' || listFilters.status === estimateStatus(estimate)));
     const rows = visible.map(estimate => {
@@ -588,10 +594,37 @@ function renderList() {
       return '<tr><td class="num">№ ' + estimate.id + '</td><td><a class="text-btn" href="#estimate/' + estimate.id + '">' +
         esc(estimate.name) + '</a><span class="secondary">' + esc(estimate.scope) + '</span></td><td>' + esc(estimate.client || '—') +
         '</td><td><span class="pill ' + (status === 'Готова' ? 'done' : 'work') + '">' + status + '</span></td>' +
-        '<td class="num">' + ready + ' из ' + estimate.rows.length + '</td><td class="num">' + estimate.date + '</td></tr>';
+        '<td class="num">' + ready + ' из ' + estimate.rows.length + '</td><td class="num">' + estimate.date + '</td>' +
+        '<td><button class="btn" type="button" data-register-estimate="' + esc(estimate.id) + '">' +
+        (listFilters.removed ? 'Восстановить' : 'Удалить из списка') + '</button></td></tr>';
     });
-    document.querySelector('#results').innerHTML = table(['Номер', 'Объект', 'Заказчик', 'Статус', 'Готовые позиции', 'Дата сметы'], rows) +
-      '<div class="foot" role="status">Показано ' + visible.length + ' из ' + estimates.length + '</div>';
+    document.querySelector('#results').innerHTML = table(['Номер', 'Объект', 'Заказчик', 'Статус', 'Готовые позиции', 'Дата сметы', 'Действия'], rows,
+      currentList.length ? undefined : listFilters.removed ? 'Удалённых смет нет.' : 'Активных смет нет.') +
+      '<div class="foot" role="status">Показано ' + visible.length + ' из ' + currentList.length + '</div>';
+  };
+  for (const [id, showRemoved] of [['#show-active-estimates', false], ['#show-removed-estimates', true]]) {
+    document.querySelector(id).onclick = () => {
+      Object.assign(listFilters, { removed: showRemoved, query: '', status: 'all' });
+      renderList();
+      document.querySelector(id).focus();
+    };
+  }
+  document.querySelector('#results').onclick = event => {
+    const button = event.target.closest('[data-register-estimate]');
+    const estimate = currentList.find(item => item.id === button?.dataset.registerEstimate);
+    if (!estimate) return;
+    const wasRemoved = Boolean(estimate.removedFromRegister);
+    if (!wasRemoved && !window.confirm('Убрать смету № ' + estimate.id + ' «' + estimate.name +
+      '» из активного списка? Её можно восстановить во вкладке «Удалённые».')) return;
+    estimate.removedFromRegister = !wasRemoved;
+    if (!save()) {
+      estimate.removedFromRegister = wasRemoved;
+      notify('Не удалось сохранить изменение в браузере.');
+      return;
+    }
+    renderList();
+    document.querySelector(wasRemoved ? '#show-removed-estimates' : '#show-active-estimates').focus({ preventScroll: true });
+    notify(wasRemoved ? 'Смета восстановлена.' : 'Смета перемещена во вкладку «Удалённые».');
   };
   document.querySelector('#create-estimate').onclick = () => {
     estimateForm.reset();
@@ -2123,7 +2156,7 @@ estimateForm.onsubmit = event => {
   };
   estimates.unshift(estimate);
   const saved = save();
-  Object.assign(listFilters, { query: '', status: 'all' });
+  Object.assign(listFilters, { query: '', status: 'all', removed: false });
   newEstimateDialog.close();
   location.hash = '#estimate/' + estimate.id;
   notify(saved ? 'Смета № ' + estimate.id + ' создана.' : 'Локальное хранилище недоступно. Смета доступна до закрытия или обновления страницы.');
