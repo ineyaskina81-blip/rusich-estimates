@@ -103,6 +103,7 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .execution-form td input{width:84px;min-width:65px;padding:5px}
 .execution-form td input[name^="comment"]{width:180px}
 .execution-form .table-wrap{margin-bottom:8px}
+.execution-overrun{color:#a42119;font-weight:700}
 .execution-error{color:#842923;background:#fff1ee;border-radius:8px;padding:10px 12px}
 .heading .heading-actions{display:flex;flex-wrap:wrap;gap:8px}
 .heading a.btn{text-decoration:none;display:inline-flex;align-items:center}
@@ -2724,6 +2725,11 @@ const workExecution = (() => {
   const id = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   const ok = (condition, message) => { if (!condition) throw new Error(message); };
   const sum = values => units(values.reduce((total, value) => total + value, 0));
+  const volumeFormat = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 6 });
+  const actualTotal = (reports, itemId) => {
+    const measured = reports.map(report => report.items[itemId]?.actual).filter(value => value != null);
+    return measured.length ? sum(measured) : null;
+  };
   const signedActs = (data, contractId) => data.acts.filter(act => act.contractId === contractId && act.status === 'signed')
     .sort((left, right) => left.signedAt.localeCompare(right.signedAt));
   const actLine = (act, itemId) => act.lines.find(line => line.itemId === itemId);
@@ -2814,16 +2820,22 @@ const workExecution = (() => {
       '</div>' + button('Добавить период')));
     if (!report) return create;
     const reportForm = form('quantities', table(
-      ['Позиция', 'Договорной объём', 'Выполнено за период', 'Предъявлено', 'Проверено', 'Принято по текущему акту',
-        'Принято ранее', 'Принято всего', 'Остаток', 'Ждёт приёмки', 'Комментарий'],
+      ['Позиция', 'Объём по смете', 'Выполнено за период', 'Выполнено всего', 'Остаток по смете', 'Предъявлено',
+        'Проверено', 'Принято по текущему акту', 'Принято ранее', 'Принято всего', 'Остаток по актам',
+        'Ждёт приёмки', 'Комментарий'],
       contract.items.map((item, index) => {
         const entry = report.items[item.id] ?? {};
         const figures = quantities(data, contract, report, item, selectedAct?.status === 'signed' ? selectedAct : null);
+        const completed = actualTotal(reportList, item.id) ?? 0;
+        const balance = units(item.volume - completed);
+        const volumeCell = value => '<td class="num' + (balance < 0 ? ' execution-overrun' : '') + '">' +
+          volumeFormat.format(value) + '</td>';
         const edit = key => field(key + index, key === 'comment' ? 'Комментарий' : 'Объём', entry[key] ?? '', 'text', false);
         return '<tr><td><strong>' + esc(item.number + ' · ' + item.name) + '</strong><span class="secondary">' + esc(item.unit) +
           ' · ' + money(item.price) + '/ед.</span>' + (figures.excess > 0 ? '<span class="pill wait">Превышение ' +
           quantity(figures.excess) + ' ' + esc(item.unit) + '</span>' : '') +
-          '</td><td class="num">' + quantity(item.volume) + '</td><td>' + edit('actual') + '</td><td>' + edit('submitted') +
+          '</td><td class="num">' + volumeFormat.format(item.volume) + '</td><td>' + edit('actual') + '</td>' +
+          volumeCell(completed) + volumeCell(balance) + '<td>' + edit('submitted') +
           '</td><td>' + edit('verified') + '</td><td class="num">' +
           quantity(selectedAct?.status === 'signed' ? actQuantity(selectedAct, item.id) : null) + '</td><td class="num">' +
           quantity(figures.previous) + '</td><td class="num">' + quantity(figures.cumulative) + '</td><td class="num">' +
@@ -2832,7 +2844,9 @@ const workExecution = (() => {
       }), 'Добавьте позиции в договорную смету.') + (contract.items.length ? button('Сохранить выполнение') : ''));
     return create + '<section class="panel execution-box"><div class="positions-head"><h2>Выполнение за период</h2>' +
       '<label>Отчётный период <select id="execution-report">' + reportList.map(item => option(item.id, periodLabel(item), report.id)).join('') +
-      '</select></label></div>' + reportForm + '</section>';
+      '</select></label></div><p class="note">«Выполнено всего» — сумма сохранённых объёмов из графы «Выполнено за период» ' +
+      'за все периоды по этому договору. Отрицательный остаток показывает превышение сметного объёма.</p>' +
+      reportForm + '</section>';
   }
 
   function actViews(estimate, data, contract, report, act) {
@@ -2886,9 +2900,8 @@ const workExecution = (() => {
         let incoming = 0;
         for (const contract of sub) {
           for (const linked of contract.items.filter(source => source.link?.customerItem === item.id)) {
-            const measured = data.reports.filter(report => report.contractId === contract.id)
-              .map(report => report.items[linked.id]?.actual).filter(value => value != null);
-            if (measured.length) fact = (fact ?? 0) + sum(measured) * linked.link.factor;
+            const measured = actualTotal(data.reports.filter(report => report.contractId === contract.id), linked.id);
+            if (measured != null) fact = (fact ?? 0) + measured * linked.link.factor;
             const lines = signedActs(data, contract.id).map(act => actLine(act, linked.id)).filter(Boolean);
             accepted += sum(lines.map(line => line.quantity)) * linked.link.factor;
             incoming += lines.reduce((total, line) => total + line.amount, 0);
