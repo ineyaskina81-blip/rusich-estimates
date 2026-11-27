@@ -723,6 +723,22 @@ function manualPriceVat(category) {
   return addsEstimateVat(category) ? 'Без НДС' : 'С НДС';
 }
 
+const estimateAmountLabels = {
+  'Работы': 'Всего работы',
+  'Материалы': 'Всего материалы',
+  'Механизмы': 'Всего машины, механизмы и доставка',
+  'Прочее': 'Всего прочее'
+};
+
+function estimateAmountCategory(category) {
+  const group = categoryGroup(category);
+  return Object.hasOwn(estimateAmountLabels, group) ? group : 'Прочее';
+}
+
+function estimateVatLabel(rate) {
+  return rate == null ? 'НДС (процент не задан)' : 'НДС ' + quantity(rate) + '%';
+}
+
 function estimateTotals(estimate) {
   const amounts = { 'Работы': 0, 'Материалы': 0, 'Механизмы': 0, 'Прочее': 0 };
   let missing = 0;
@@ -732,9 +748,7 @@ function estimateTotals(estimate) {
       missing++;
       continue;
     }
-    const category = row.category === 'Доставка' ? 'Механизмы' : row.category;
-    const bucket = Object.hasOwn(amounts, category) ? category : 'Прочее';
-    amounts[bucket] += amount;
+    amounts[estimateAmountCategory(row.category)] += amount;
   }
   const subtotal = Object.values(amounts).reduce((sum, amount) => sum + amount, 0);
   const rate = estimate.vatRate;
@@ -747,18 +761,14 @@ function renderEstimateTotals(estimate, totals, groups) {
   const { amounts, subtotal, vat, total } = totals;
   const showMoney = value => value == null ? '—' : money(value / 100);
   const line = (label, value) => '<div><dt>' + label + '</dt><dd>' + showMoney(value) + '</dd></div>';
-  const vatLabel = estimate.vatRate == null ? 'НДС (процент не задан)' : 'НДС ' + quantity(estimate.vatRate) + '%';
   return '<section class="panel panel-head estimate-totals" aria-labelledby="estimate-totals-title">' +
     '<h2 id="estimate-totals-title" tabindex="-1">Итоги сметы</h2>' +
     (estimate.sections?.length ? '<details><summary>Суммы по разделам</summary><dl class="detail">' + groups.map(group =>
       line(group.section ? esc(sectionLabel(estimate, group.section.id)) : 'Без раздела', sectionSubtotal(groupRows(group)))
     ).join('') + line('Итого по всем строкам до начисления НДС', subtotal) + '</dl></details>' : '') +
     '<dl class="detail">' +
-    line('Всего работы', amounts['Работы']) +
-    line('Всего материалы', amounts['Материалы']) +
-    line('Всего машины, механизмы и доставка', amounts['Механизмы']) +
-    line('Всего прочее', amounts['Прочее']) +
-    line('ИТОГО по смете до начисления НДС', subtotal) + line(vatLabel, vat) +
+    Object.entries(estimateAmountLabels).map(([category, label]) => line(label, amounts[category])).join('') +
+    line('ИТОГО по смете до начисления НДС', subtotal) + line(estimateVatLabel(estimate.vatRate), vat) +
     line('ИТОГО с НДС', total) + '</dl>' +
     '<p class="note">НДС начисляется на работы, машины, механизмы и доставку. Материалы и «Прочее» входят в итог по введённым ценам.</p>' +
     '<form class="vat-form" id="estimate-vat-form">' +
@@ -2210,7 +2220,6 @@ function createEstimateWorkbook(estimate, header) {
   const rows = [];
   const merges = [...template.merges];
   const worksheetRows = new Map();
-  const subtotalCells = [];
   let number = 21;
   let position = 0;
   const xml = value => esc(String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g, ''));
@@ -2234,7 +2243,6 @@ function createEstimateWorkbook(estimate, header) {
     if (byColumn.has('N')) cells.push(cell('N' + index, ...byColumn.get('N')));
     return rowXml(index, height, cells);
   }
-  const includeInVat = source => addsEstimateVat(source.category);
 
   function sectionHeading(label, style) {
     number++;
@@ -2259,7 +2267,6 @@ function createEstimateWorkbook(estimate, header) {
     const amount = groupRows(group).reduce((sum, source) => sum + (estimateLineAmount(source) ?? 0), 0) / 100;
     rows.push(tableRow(number, 26, [['A', 92, label ? 'Итого по разделу «' + label + '»' : 'Итого по позициям'],
       ['J', template.numeric.total, amount, first <= last ? 'SUM(J' + first + ':J' + last + ')' : null]], 'A', 'I'));
-    subtotalCells.push('J' + number);
   }
 
   function summary(label, value, formula) {
@@ -2270,13 +2277,15 @@ function createEstimateWorkbook(estimate, header) {
   }
 
   const lastSection = number;
-  const subtotal = summary('Итого по смете до начисления НДС', totals.subtotal / 100,
-    subtotalCells.length ? subtotalCells.join('+') : null);
-  const rate = summary('Ставка НДС, %', estimate.vatRate ?? null);
-  const vat = summary('НДС', totals.vat == null ? null : totals.vat / 100, totals.vat == null ? null :
-    'ROUND(SUM(N22:N' + lastSection + ')*J' + rate + '/100,2)');
-  const final = summary(totals.vat == null ? 'Итого по смете' : 'Итого по смете с НДС',
-    (totals.total ?? totals.subtotal) / 100, 'SUM(J' + subtotal + ',J' + vat + ')');
+  const categoryTotals = Object.fromEntries(Object.entries(estimateAmountLabels).map(([category, label]) =>
+    [category, summary(label, totals.amounts[category] / 100, lastSection >= 22 ?
+      'SUMIF(N22:N' + lastSection + ',"' + category + '",J22:J' + lastSection + ')' : null)]));
+  const subtotal = summary('ИТОГО по смете до начисления НДС', totals.subtotal / 100,
+    'SUM(J' + categoryTotals['Работы'] + ':J' + categoryTotals['Прочее'] + ')');
+  const vat = summary(estimateVatLabel(estimate.vatRate), totals.vat == null ? null : totals.vat / 100, totals.vat == null ? null :
+    'ROUND((J' + categoryTotals['Работы'] + '+J' + categoryTotals['Механизмы'] + ')*' + Math.round(estimate.vatRate * 100) + '/10000,2)');
+  const final = summary('ИТОГО с НДС', totals.total == null ? null : totals.total / 100,
+    totals.total == null ? null : 'SUM(J' + subtotal + ',J' + vat + ')');
   const notes = [
     estimate.rows.some(source => source.customerPrice == null) ? 'Предварительная смета' : '',
     totals.missing ? 'Позиций без цены: ' + totals.missing : '',
@@ -2309,7 +2318,7 @@ function createEstimateWorkbook(estimate, header) {
     cells.map(([col, style, value]) => {
       const ref = col + row;
       return cell(ref, ref === 'E16' ? template.numeric.thousands : style, Object.hasOwn(fixedHeader, ref) ? fixedHeader[ref] : value,
-        ref === 'E16' ? 'J' + final + '/1000' : null);
+        ref === 'E16' ? 'J' + (totals.total == null ? subtotal : final) + '/1000' : null);
     }))).join('');
   const details = rows.map(record => {
     if (typeof record === 'string') return record;
@@ -2330,7 +2339,7 @@ function createEstimateWorkbook(estimate, header) {
       ['J', template.numeric.money, amount, amount == null ? null : 'ROUND(H' + number + '*I' + number + ',2)'],
       ...['K', 'L', 'M'].map(col => [col, 35, null])
     ];
-    if (includeInVat(source) && amount != null) rowCells.push(['N', 35, amount, 'J' + number]);
+    rowCells.push(['N', 0, estimateAmountCategory(source.category)]);
     return tableRow(number, Math.max(25.5, 15 * Math.ceil(source.name.length / 52)), rowCells, 'C', 'E');
   }).join('');
 
