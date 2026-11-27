@@ -443,7 +443,7 @@ function nextEstimateStage(estimate, stage) {
 }
 
 function omtsCatalogRate(row) {
-  const rate = row.draftPrice != null ? { value: row.draftPrice, vat: 'С НДС' } : baseCatalogPrice(row);
+  const rate = row.draftPrice != null ? { value: row.draftPrice, vat: manualPriceVat(row.category) } : baseCatalogPrice(row);
   return Number.isFinite(rate?.value) && rate.value > 0 ? rate : null;
 }
 
@@ -694,6 +694,14 @@ function sectionSubtotal(rows) {
   return rows.reduce((sum, row) => sum + (estimateLineAmount(row) ?? 0), 0);
 }
 
+function addsEstimateVat(category) {
+  return category === 'Работы' || categoryGroup(category) === 'Механизмы';
+}
+
+function manualPriceVat(category) {
+  return addsEstimateVat(category) ? 'Без НДС' : 'С НДС';
+}
+
 function estimateTotals(estimate) {
   const amounts = { 'Работы': 0, 'Материалы': 0, 'Механизмы': 0, 'Прочее': 0 };
   let missing = 0;
@@ -709,7 +717,7 @@ function estimateTotals(estimate) {
   }
   const subtotal = Object.values(amounts).reduce((sum, amount) => sum + amount, 0);
   const rate = estimate.vatRate;
-  const vatBase = amounts['Работы'];
+  const vatBase = amounts['Работы'] + amounts['Механизмы'];
   const vat = rate == null ? null : Math.round(vatBase * Math.round(rate * 100) / 10000);
   return { amounts, subtotal, vat, total: vat == null ? null : subtotal + vat, missing };
 }
@@ -731,7 +739,7 @@ function renderEstimateTotals(estimate, totals, groups) {
     line('Всего прочее', amounts['Прочее']) +
     line('ИТОГО по смете до начисления НДС', subtotal) + line(vatLabel, vat) +
     line('ИТОГО с НДС', total) + '</dl>' +
-    '<p class="note">НДС начисляется только на работы. В ценах позиций «Прочее» НДС уже учтён.</p>' +
+    '<p class="note">НДС начисляется на работы, машины, механизмы и доставку. Материалы и «Прочее» входят в итог по введённым ценам.</p>' +
     '<form class="vat-form" id="estimate-vat-form">' +
       '<label>НДС, %<input name="vatRate" type="number" min="0" max="100" step="0.01" required value="' +
       esc(estimate.vatRate ?? '') + '"></label><button class="btn" type="submit">Сохранить НДС</button></form>' +
@@ -1469,11 +1477,10 @@ function stepForm(index, row, prices) {
       '</select></label>' + numericField('Объём', 'volume') + '</div>' + draftField(),
     () => '<label>Наименование расценки<input name="name" required maxlength="500"></label>' +
       volumeField() + draftField(),
-    () => volumeField() + numericField(categoryGroup(row.category) === 'Механизмы' ? 'Цена ОМТС за единицу с НДС, ₽' : 'Цена ОМТС за единицу, ₽',
+    () => volumeField() + numericField('Цена ОМТС за единицу ' + (addsEstimateVat(row.category) ? 'без НДС' : 'с НДС') + ', ₽',
       'supplyPrice', needsOmtsPrice(row, 2)),
     () => volumeField() +
-      numericField(categoryGroup(row.category) === 'Механизмы' ?
-      'Цена заказчику за единицу с НДС, ₽' : 'Цена заказчику за единицу, ₽', 'customerPrice') +
+      numericField('Цена заказчику за единицу ' + (addsEstimateVat(row.category) ? 'без НДС' : 'с НДС') + ', ₽', 'customerPrice') +
       (row?.supplyPrice != null ? '<button class="btn copy-price" id="copy-price" type="button">Взять цену ОМТС</button>' : '')
   ];
   const title = index === 0 ? '<h3 id="inline-position-title">' +
@@ -1965,7 +1972,7 @@ function bindPositionForm(surface, index, row, prices = [], basePrice, editingCu
         if (price?.value === row.supplyPrice) row.supplyVat = price.vat;
         else if (previousValue !== row.supplyPrice) {
           delete row.supplyRate;
-          row.supplyVat = 'С НДС';
+          row.supplyVat = manualPriceVat(row.category);
         }
       }
       if (index === 3) {
