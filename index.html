@@ -103,6 +103,8 @@ dialog{border:0;border-left:1px solid var(--line);width:min(500px,100vw);height:
 .execution-form td input{width:84px;min-width:65px;padding:5px}
 .execution-form td input[name^="comment"]{width:180px}
 .execution-form .table-wrap{margin-bottom:8px}
+.execution-section th{background:#e9efff;color:var(--brand-dark);font-weight:700}
+.execution-subsection th{background:#f4f7fc;color:var(--ink);font-weight:650;padding-left:26px}
 .execution-overrun{color:#a42119;font-weight:700}
 .execution-error{color:#842923;background:#fff1ee;border-radius:8px;padding:10px 12px}
 .heading .heading-actions{display:flex;flex-wrap:wrap;gap:8px}
@@ -2814,36 +2816,59 @@ const workExecution = (() => {
     return positions + revisions + mapping;
   }
 
-  function reportViews(data, contract, report, selectedAct) {
+  function reportRowsBySection(estimate, rows, columnCount) {
+    const heading = (name, level) => '<tr class="execution-' + level + '"><th colspan="' +
+      columnCount + '">' + esc(name) + '</th></tr>';
+    const take = row => {
+      const markup = rows.get(row.id) ?? '';
+      rows.delete(row.id);
+      return markup;
+    };
+    const groups = orderedGroups(estimate).map(group => {
+      const content = group.entries.map(entry => {
+        if (entry.row) return take(entry.row);
+        const items = entry.rows.map(take).join('');
+        return items ? heading(entry.child.name, 'subsection') + items : '';
+      }).join('');
+      return content && (group.section ? heading(group.section.name, 'section') : '') + content;
+    });
+    return [...groups, ...rows.values()];
+  }
+
+  function reportViews(estimate, data, contract, report, selectedAct) {
     const reportList = data.reports.filter(report => report.contractId === contract.id);
     const create = group('Добавить отчётный период', form('report', '<div class="fields">' +
       field('start', 'Начало периода', '', 'date') + field('end', 'Конец периода', '', 'date') +
       '</div>' + button('Добавить период')));
     if (!report) return create;
-    const reportForm = form('quantities', table(
-      ['Позиция', 'Объём по смете', 'Выполнено за период', 'Выполнено всего', 'Остаток по смете', 'Предъявлено',
-        'Проверено', 'Принято по текущему акту', 'Принято ранее', 'Принято всего', 'Остаток по актам',
-        'Ждёт приёмки', 'Комментарий'],
-      contract.items.map((item, index) => {
-        const entry = report.items[item.id] ?? {};
-        const figures = quantities(data, contract, report, item, selectedAct?.status === 'signed' ? selectedAct : null);
-        const completed = actualTotal(reportList, item.id) ?? 0;
-        const balance = units(item.volume - completed);
-        const volumeCell = value => '<td class="num' + (balance < 0 ? ' execution-overrun' : '') + '">' +
-          volumeFormat.format(value) + '</td>';
-        const edit = key => field(key + index, key === 'comment' ? 'Комментарий' : 'Объём', entry[key] ?? '', 'text', false,
-          key === 'actual' ? ' aria-describedby="execution-actual-help"' : '');
-        return '<tr><td><strong>' + esc(item.number + ' · ' + item.name) + '</strong><span class="secondary">' + esc(item.unit) +
-          ' · ' + money(item.price) + '/ед.</span>' + (figures.excess > 0 ? '<span class="pill wait">Превышение ' +
-          quantity(figures.excess) + ' ' + esc(item.unit) + '</span>' : '') +
-          '</td><td class="num">' + volumeFormat.format(item.volume) + '</td><td>' + edit('actual') + '</td>' +
-          volumeCell(completed) + volumeCell(balance) + '<td>' + edit('submitted') +
-          '</td><td>' + edit('verified') + '</td><td class="num">' +
-          quantity(selectedAct?.status === 'signed' ? actQuantity(selectedAct, item.id) : null) + '</td><td class="num">' +
-          quantity(figures.previous) + '</td><td class="num">' + quantity(figures.cumulative) + '</td><td class="num">' +
-          quantity(figures.remaining) + '</td><td class="num">' +
-          quantity(figures.pending) + '</td><td>' + edit('comment') + '</td></tr>';
-      }), 'Добавьте позиции в договорную смету.') + (contract.items.length ? button('Сохранить выполнение') : ''));
+    const headers = ['Позиция', 'Объём по смете', 'Выполнено за период', 'Выполнено всего', 'Остаток по смете', 'Предъявлено',
+      'Проверено', 'Принято по текущему акту', 'Принято ранее', 'Принято всего', 'Остаток по актам',
+      'Ждёт приёмки', 'Комментарий'];
+    const rows = new Map(contract.items.map((item, index) => {
+      const entry = report.items[item.id] ?? {};
+      const figures = quantities(data, contract, report, item, selectedAct?.status === 'signed' ? selectedAct : null);
+      const completed = actualTotal(reportList, item.id) ?? 0;
+      const balance = units(item.volume - completed);
+      const volumeCell = value => '<td class="num' + (balance < 0 ? ' execution-overrun' : '') + '">' +
+        volumeFormat.format(value) + '</td>';
+      const edit = key => field(key + index, key === 'comment' ? 'Комментарий' : 'Объём', entry[key] ?? '', 'text', false,
+        key === 'actual' ? ' aria-describedby="execution-actual-help"' : '');
+      const markup = '<tr><td><strong>' + esc(item.number + ' · ' + item.name) + '</strong><span class="secondary">' + esc(item.unit) +
+        ' · ' + money(item.price) + '/ед.</span>' + (figures.excess > 0 ? '<span class="pill wait">Превышение ' +
+        quantity(figures.excess) + ' ' + esc(item.unit) + '</span>' : '') +
+        '</td><td class="num">' + volumeFormat.format(item.volume) + '</td><td>' + edit('actual') + '</td>' +
+        volumeCell(completed) + volumeCell(balance) + '<td>' + edit('submitted') +
+        '</td><td>' + edit('verified') + '</td><td class="num">' +
+        quantity(selectedAct?.status === 'signed' ? actQuantity(selectedAct, item.id) : null) + '</td><td class="num">' +
+        quantity(figures.previous) + '</td><td class="num">' + quantity(figures.cumulative) + '</td><td class="num">' +
+        quantity(figures.remaining) + '</td><td class="num">' +
+        quantity(figures.pending) + '</td><td>' + edit('comment') + '</td></tr>';
+      return [item.id, markup];
+    }));
+    const reportRows = contract.side === 'customer'
+      ? reportRowsBySection(estimate, rows, headers.length) : [...rows.values()];
+    const reportForm = form('quantities', table(headers, reportRows, 'Добавьте позиции в договорную смету.') +
+      (contract.items.length ? button('Сохранить выполнение') : ''));
     return create + '<section class="panel execution-box"><div class="positions-head"><h2>Выполнение за период</h2>' +
       '<label>Отчётный период <select id="execution-report">' + reportList.map(item => option(item.id, periodLabel(item), report.id)).join('') +
       '</select></label></div><p class="note" id="execution-actual-help">В графе «Выполнено за период» введите объём числом, ' +
@@ -3098,7 +3123,7 @@ const workExecution = (() => {
         estimate.vatRate == null ? 'none' : 'estimate') : '') +
       (!customer && !ready ? '<p class="note">Завершите смету объекта, чтобы создать договор для сдачи заказчику.</p>' : '') +
       (contract ? group('Реквизиты и НДС договора', form('terms', contractFields(contract) + button('Сохранить реквизиты'))) +
-        positionForms(data, contract) + reportViews(data, contract, report, act) + actViews(estimate, data, contract, report, act) : '') +
+        positionForms(data, contract) + reportViews(estimate, data, contract, report, act) + actViews(estimate, data, contract, report, act) : '') +
       group('Сводка по объекту', objectSummary(data)) +
       '<p id="execution-error" class="execution-error" role="alert" hidden></p></div>';
     const selection = (key, resets) => {
