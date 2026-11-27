@@ -536,6 +536,74 @@ function save() {
   }
 }
 
+function readEstimateTransfer(text) {
+  const invalid = () => new Error('Файл не распознан. Выберите JSON, сохранённый кнопкой «Файл для переноса» в «Русиче».');
+  const data = JSON.parse(text.replace(/^\uFEFF/, ''), (key, value) => {
+    if (['__proto__', 'constructor', 'prototype'].includes(key)) throw invalid();
+    return value;
+  });
+  const estimate = data?.estimate;
+  const object = value => value != null && typeof value === 'object' && !Array.isArray(value);
+  const strings = (item, ...keys) => keys.every(key => typeof item[key] === 'string');
+  const numbers = (item, ...keys) => keys.every(key => item[key] == null || Number.isFinite(item[key]));
+  const all = (value, test) => Array.isArray(value) && value.every(item => object(item) && test(item));
+  const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const validId = value => typeof value === 'string' && /^[a-zA-Z0-9-]+$/.test(value);
+  const validPrices = row => ['basePrice', 'baseWorkPrice'].every(key => row[key] == null ||
+    (object(row[key]) && Number.isFinite(row[key].value)));
+  const rowValid = row => strings(row, 'id', 'name', 'unit', 'category') && /^\d+$/.test(row.id) &&
+    categories.includes(row.category) && numbers(row, 'volume', 'hours', 'supplyPrice', 'customerPrice', 'draftPrice') &&
+    (row.structure == null || typeof row.structure === 'string') && validPrices(row) && (row.formulas == null ||
+      (object(row.formulas) && Object.values(row.formulas).every(formula => typeof formula === 'string' && formula.length < 15000)));
+  const sectionValid = section => strings(section, 'id', 'name') &&
+    all(section.children, child => strings(child, 'id', 'name')) &&
+    (section.layout == null || (Array.isArray(section.layout) && section.layout.every(key => typeof key === 'string')));
+  if (data?.format !== 'rusich-estimate' || data.version !== 1 || !object(estimate) ||
+    !/^\d{2,4}-\d{3,}$/.test(estimate.id) || !strings(estimate, 'name', 'client', 'scope', 'date') ||
+    !/^\d{1,2}\.\d{1,2}\.\d{4}$/.test(estimate.date) || !all(estimate.rows, rowValid) ||
+    new Set(estimate.rows.map(row => row.id)).size !== estimate.rows.length ||
+    (estimate.workflowStage != null && ![0, 1, 2, 3].includes(estimate.workflowStage)) ||
+    (estimate.vatRate != null && (!Number.isFinite(estimate.vatRate) || estimate.vatRate < 0 || estimate.vatRate > 100)) ||
+    (estimate.sections != null && !all(estimate.sections, sectionValid))) throw invalid();
+  const execution = estimate.execution;
+  if (execution != null && (!object(execution) ||
+    !all(execution.contracts, item => validId(item.id) && date(item.date) && strings(item, 'number', 'party', 'side', 'vatMode') &&
+      numbers(item, 'rate') && all(item.items, row => validId(row.id) && strings(row, 'name', 'number', 'unit') &&
+        numbers(row, 'volume', 'price') && (row.link == null || (object(row.link) && numbers(row.link, 'factor')))) &&
+      all(item.amendments, entry => date(entry.date) && numbers(entry, 'volume', 'oldVolume', 'price'))) ||
+    !all(execution.reports, report => validId(report.id) && validId(report.contractId) && date(report.start) && date(report.end) &&
+      object(report.items) && Object.values(report.items).every(item => object(item) && numbers(item, 'submitted', 'verified', 'actual'))) ||
+    !all(execution.acts, act => validId(act.id) && validId(act.contractId) && validId(act.reportId) &&
+      strings(act, 'number', 'status') && date(act.date) && ['signed', 'draft'].includes(act.status) &&
+      all(act.lines, line => validId(line.itemId) && numbers(line, 'quantity', 'amount', 'price')) &&
+      (act.status !== 'signed' || (object(act.header) && date(act.header.contractDate) && date(act.header.start) &&
+        date(act.header.end) && strings(act, 'signedAt') && numbers(act, 'total', 'subtotal', 'vat')))))) throw invalid();
+  return estimate;
+}
+
+function storeTransferredEstimate(estimate) {
+  if (estimates.some(item => item.id === estimate.id)) throw new Error('Смета № ' + estimate.id +
+    ' уже есть в этом браузере. Проверьте вкладки «Активные» и «Удалённые».');
+  estimate.removedFromRegister = false;
+  estimates.unshift(estimate);
+  if (!save()) {
+    estimates.shift();
+    throw new Error('Браузер не смог сохранить смету. Проверьте, доступно ли локальное хранилище и есть ли в нём место.');
+  }
+}
+
+function downloadEstimateTransfer(estimate) {
+  const file = new Blob([JSON.stringify({ format: 'rusich-estimate', version: 1, estimate })], { type: 'application/json' });
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'rusich-estimate-' + estimate.id + '.json';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 function notify(message) {
   clearTimeout(toastTimer);
   toast.textContent = message;
@@ -573,6 +641,8 @@ function renderList() {
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Сметный отдел</p><h1>Сметы</h1>' +
     '<p class="subtitle">Создайте смету или откройте её из реестра.</p></div>' +
     '<div class="heading-actions"><a class="btn" href="#execution">Выполнение работ</a>' +
+    '<input class="sr-only" id="import-estimate-file" type="file" accept=".json,application/json">' +
+    '<label class="btn catalog-file-label" for="import-estimate-file">Загрузить смету из файла</label>' +
     '<button class="btn primary compact" id="create-estimate" type="button" aria-haspopup="dialog">+ Новая смета</button></div></div>' +
     '<section class="stats" aria-label="Состояние смет">' + stat('Всего смет', registered.length) +
     stat('В работе', registered.length - completed) + stat('Готовы', completed) + '</section>' +
@@ -630,6 +700,22 @@ function renderList() {
     estimateForm.reset();
     estimateForm.elements.namedItem('name').setCustomValidity('');
     newEstimateDialog.showModal();
+  };
+  const transferInput = document.querySelector('#import-estimate-file');
+  transferInput.onchange = async () => {
+    const file = transferInput.files?.[0];
+    transferInput.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 20_000_000) throw new Error('Файл сметы больше 20 МБ.');
+      const estimate = readEstimateTransfer(await file.text());
+      storeTransferredEstimate(estimate);
+      Object.assign(listFilters, { removed: false, query: '', status: 'all' });
+      location.hash = '#estimate/' + estimate.id;
+      notify('Смета № ' + estimate.id + ' загружена.');
+    } catch (error) {
+      notify(error instanceof SyntaxError ? 'Выберите корректный файл сметы JSON.' : error.message);
+    }
   };
   document.querySelector('#query').oninput = event => { listFilters.query = event.target.value; draw(); };
   document.querySelector('#status').onchange = event => { listFilters.status = event.target.value; draw(); };
@@ -1148,6 +1234,7 @@ function renderCard(resetEntry = false) {
   main.innerHTML = '<div class="heading"><div><p class="eyebrow">Смета № ' + estimate.id + '</p><h1>' + esc(estimate.name) +
     '</h1>' + (subtitle ? '<p class="subtitle">' + esc(subtitle) + '</p>' : '') + '</div>' +
     '<div class="heading-actions"><a class="btn" href="#execution/' + encodeURIComponent(estimate.id) + '">Выполнение работ</a>' +
+    '<button class="btn" id="download-estimate-transfer" type="button">Файл для переноса</button>' +
     '<button class="btn primary compact" id="download-estimate" type="button" aria-haspopup="dialog">Выгрузить в Excel</button></div></div>' +
     '<div class="panel estimate-total-bar" aria-label="Итог и управление разделами"><div><strong>' +
     (totals.total == null ? 'ИТОГО по смете ' + money(totals.subtotal / 100) : 'ИТОГО с НДС ' + money(totals.total / 100)) +
@@ -1193,6 +1280,7 @@ function renderCard(resetEntry = false) {
     heading.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   };
+  document.querySelector('#download-estimate-transfer').onclick = () => downloadEstimateTransfer(estimate);
   document.querySelector('#download-estimate').onclick = () => {
     exportForm.reset();
     for (const key of ['agreement', 'contractor', 'customer']) exportForm.elements.namedItem(key).value = estimate.exportHeader?.[key] ?? '';
